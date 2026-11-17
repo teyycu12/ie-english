@@ -537,12 +537,15 @@ function Import(el) {
       <summary><b>Gemini 設定</b> ${st.geminiKey ? `<span class="pill good">已設定</span>` : `<span class="pill badc">尚未設定</span>`}</summary>
       <p class="muted small">到 Google AI Studio（aistudio.google.com）免費申請 API Key，貼在下面。Key 只會存在這支手機，不會上傳到其他地方。</p>
       <input class="search" id="key" type="password" placeholder="貼上 Gemini API Key" value="${esc(st.geminiKey)}">
+      <label class="small muted">主要模型</label>
       <input class="search" id="model" placeholder="模型名稱" value="${esc(st.model)}">
+      <label class="small muted">備用模型（主要模型太忙時自動改用，選填）</label>
+      <input class="search" id="fallback" placeholder="例如 AI Studio 列出的 Flash-Lite 模型名稱" value="${esc(st.fallback || "")}">
       <button class="ghost" id="savek">儲存</button>
     </details>`;
   let file = null;
   $("#file").onchange = e => { file = e.target.files[0]; $("#fname").textContent = file ? "✅ " + file.name : "📄 點此選擇 PDF 或拍照"; };
-  $("#savek").onclick = () => { st.geminiKey = $("#key").value.trim(); st.model = $("#model").value.trim() || "gemini-3.8-flash"; save(); toast("已儲存"); render(); };
+  $("#savek").onclick = () => { st.geminiKey = $("#key").value.trim(); st.model = $("#model").value.trim() || "gemini-3.8-flash"; st.fallback = $("#fallback").value.trim(); save(); toast("已儲存"); render(); };
   $("#go").onclick = async () => {
     if (!st.geminiKey) { toast("請先設定 Gemini API Key"); return; }
     if (!file && !$("#txt").value.trim()) { toast("請上傳檔案或貼上文字"); return; }
@@ -576,18 +579,39 @@ async function analyze(file, text, note) {
   return gemini(parts);
 }
 
-async function gemini(parts) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(S.settings.model)}:generateContent`;
+// 忙碌（503 / 429 / high demand）時自動重試，最後再試備用模型
+const BUSY = (status, msg) => status === 503 || status === 429 || status === 500 || /high demand|overload|unavailable|try again/i.test(msg || "");
+async function callModel(model, parts) {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const r = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": S.settings.geminiKey },
     body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", temperature: 0.4 } }),
   });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j.error?.message || `HTTP ${r.status}`);
-  const t = j.candidates?.[0]?.content?.parts?.map(p => p.text).join("") || "";
-  try { return JSON.parse(t.replace(/^```json|```$/g, "").trim()); }
-  catch { throw new Error("AI 回傳格式無法解析，請再試一次"); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.error?.message || `HTTP ${r.status}`); e.busy = BUSY(r.status, j.error?.message); throw e; }
+  return j;
+}
+async function gemini(parts) {
+  const models = [S.settings.model, S.settings.fallback].filter(Boolean);
+  const waits = [2, 5, 10];
+  let lastErr;
+  for (const model of models) {
+    for (let i = 0; i <= waits.length; i++) {
+      try {
+        const j = await callModel(model, parts);
+        const t = j.candidates?.[0]?.content?.parts?.map(p => p.text).join("") || "";
+        try { return JSON.parse(t.replace(/^```json|```$/g, "").trim()); }
+        catch { throw new Error("AI 回傳格式無法解析，請再試一次"); }
+      } catch (e) {
+        lastErr = e;
+        if (!e.busy) throw e;
+        if (i < waits.length) { toast(`Gemini 忙碌中，${waits[i]} 秒後自動重試（${i + 1}/${waits.length}）`); await new Promise(r => setTimeout(r, waits[i] * 1000)); }
+      }
+    }
+    if (models.length > 1 && model === models[0]) toast(`改用備用模型 ${models[1]}`);
+  }
+  throw new Error(`Gemini 目前太忙（${lastErr?.message || "high demand"}）。請過幾分鐘再試${S.settings.fallback ? "" : "，或在 Gemini 設定填一個備用模型"}。`);
 }
 
 function showResult(out, res, src) {
