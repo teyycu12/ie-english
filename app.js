@@ -2,6 +2,7 @@ import { WORDS } from "./data/words.js";
 import { AWL } from "./data/awl.js";
 import { L7000 } from "./data/l7000.js";
 import { TOEFL, TOEFL_THEMES } from "./data/toefl.js";
+import { PHRASES, PHRASE_GROUPS } from "./data/phrases.js";
 import { GRAMMAR } from "./data/grammar.js";
 import { READINGS, WRITING } from "./data/articles.js";
 
@@ -10,7 +11,7 @@ const KEY = "iee:v1";
 const DAY = 86400000;
 const NEW_PER_DAY = 40;
 const defaults = () => ({
-  cards: {}, custom: [], customQs: [], mistakes: [],
+  cards: {}, custom: [], customQs: [], mistakes: [], past: [], flags: {},
   streak: { last: "", n: 0 }, log: {},
   settings: { geminiKey: "", model: "gemini-2.5-flash", newPerDay: NEW_PER_DAY },
 });
@@ -28,7 +29,8 @@ const esc = (s = "") => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<":
 const $ = sel => document.querySelector(sel);
 /* ---- 單字庫：依優先順序排列（新卡會照這個順序出） ---- */
 const DECKS = [
-  { id: "MINE", name: "我的錯題字", desc: "從你上傳的考卷挑出", pri: 0 },
+  { id: "MINE", name: "我的單字", desc: "上傳考卷挑出 + 手動新增", pri: 0 },
+  { id: "PH", name: "片語", desc: "同動詞分組 · 片語填空", pri: 1 },
   { id: "L7000", name: "高中 7000（L5–6）", desc: "台科主力、臺清交基礎 · 例句由 AI 補", pri: 1 },
   { id: "AWL", name: "AWL 學術字彙", desc: "570 字族 · 四校共通核心", pri: 2 },
   { id: "TOEFL", name: "托福核心", desc: "依閱讀常見主題分類", pri: 3 },
@@ -41,7 +43,7 @@ const BASE = (() => {
   const seen = new Map(), out = [];
   const awl = AWL.map(a => ({ ...a, ...(extra[a.w] ? { syn: extra[a.w].syn, col: extra[a.w].col, root: extra[a.w].root } : {}) }));
   const others = WORDS.filter(w => w.tag !== "AWL").map(w => w.tag === "TOEFL" ? { ...w, sub: 0 } : w);
-  for (const w of [...awl, ...TOEFL, ...others, ...L7000]) {
+  for (const w of [...awl, ...TOEFL, ...PHRASES, ...others, ...L7000]) {
     const k = w.w.toLowerCase();
     if (!seen.has(k)) { seen.set(k, w); out.push(w); }
   }
@@ -51,7 +53,18 @@ const SUBS = {
   AWL: [...Array(10)].map((_, i) => [i + 1, `Sublist ${i + 1}`]),
   L7000: [[5, "Level 5"], [6, "Level 6"]],
   TOEFL: [...TOEFL_THEMES.map((t, i) => [i, t]).slice(1), [0, "綜合"]],
+  PH: [...PHRASE_GROUPS.map((g, i) => [i + 1, g === "academic" ? "學術搭配" : g]), [0, "我的片語"]],
 };
+const norm = t => String(t || "").trim().toLowerCase().replace(/\s+/g, " ");
+const findWord = t => allWords().find(w => norm(w.w) === norm(t));
+// 歷屆錯的字：字庫已有 → 直接排入「現在」複習並標記，不重複新增
+function reviewNow(word, src, past = true) {
+  const c = S.cards[word] || { ease: 2.5, ivl: 0, reps: 0, lapses: 0 };
+  c.due = Date.now(); c.lapses = (c.lapses || 0) + 1; c.ease = Math.max(1.3, (c.ease || 2.5) - 0.2); c.ivl = 0; c.reps = 0;
+  delete c.known;
+  S.cards[word] = c;
+  if (past) S.flags[word] = { past: 1, src: src || (S.flags[word]?.src) || "" };
+}
 const allWords = () => {
   const base = new Set(BASE.map(w => w.w));
   return [...S.custom.filter(w => !base.has(w.w)), ...BASE]
@@ -124,7 +137,16 @@ function buildQueue(tag) {
   ws = ws.filter(w => inDeck(w, tag));
   const due = ws.filter(w => S.cards[w.w] && S.cards[w.w].due <= now).sort((a, b) => S.cards[a.w].due - S.cards[b.w].due);
   const newLeft = Math.max(0, S.settings.newPerDay - newIntroducedToday());
-  const fresh = ws.filter(w => !S.cards[w.w]).slice(0, newLeft);
+  const unseen = ws.filter(w => !S.cards[w.w]);
+  let fresh = unseen.slice(0, newLeft);
+  if (!tag || tag === "ALL") {
+    // 全部模式：各字庫交錯出新字（我的單字 3 : 7000 2 : AWL 2 : 片語 1 : 托福 1 : 工工 1）
+    const W = { MINE: 3, L7000: 2, AWL: 2, PH: 1, TOEFL: 1, IE: 1 };
+    const pools = Object.keys(W).map(k => unseen.filter(w => w.tag === k));
+    fresh = [];
+    while (fresh.length < newLeft && pools.some(p => p.length))
+      Object.keys(W).forEach((k, i) => { for (let j = 0; j < W[k] && pools[i].length && fresh.length < newLeft; j++) fresh.push(pools[i].shift()); });
+  }
   return [...due, ...fresh];
 }
 
@@ -139,11 +161,11 @@ function speak(text) {
 window.speak = speak;
 
 /* ================= 路由 ================= */
-const routes = { home: Home, vocab: Vocab, grammar: Grammar, read: Read, import: Import };
+const routes = { home: Home, vocab: Vocab, grammar: Grammar, read: Read, import: Import, phrase: Phrase, past: Past, add: AddWord };
 function render() {
   const [name, ...args] = (location.hash.replace(/^#\/?/, "") || "home").split(/[\/-]/);
   const view = routes[name] || Home;
-  document.querySelectorAll("nav.tabs a").forEach(a => a.classList.toggle("on", a.dataset.r === name));
+  document.querySelectorAll("nav.tabs a").forEach(a => a.classList.toggle("on", a.dataset.r === ({ import: "past", add: "vocab", phrase: "vocab" }[name] || name)));
   $("#app").innerHTML = "";
   $("#app").scrollTop = 0; window.scrollTo(0, 0);
   view($("#app"), ...args.map(decodeURIComponent));
@@ -180,8 +202,10 @@ function Home(el) {
     <section class="grid2">
       <a class="tile" href="#grammar"><span>✍️</span><b>文法刷題</b><small>${GRAMMAR.length} 個考點</small></a>
       <a class="tile" href="#read"><span>📖</span><b>文章練習</b><small>閱讀 · 寫作架構</small></a>
+      <a class="tile" href="#phrase"><span>🧩</span><b>片語填空</b><small>take on / take over…</small></a>
+      <a class="tile" href="#past"><span>📚</span><b>歷屆錯題</b><small>${S.past.length} 題 · 上傳考卷</small></a>
       <a class="tile" href="#vocab-quiz"><span>🎯</span><b>單字選擇題</b><small>模擬考題</small></a>
-      <a class="tile" href="#import"><span>📥</span><b>匯入考卷</b><small>AI 挑錯題出題</small></a>
+      <a class="tile" href="#add"><span>➕</span><b>手動新增</b><small>單字 / 片語</small></a>
     </section>
     <section class="card-box">
       <h3>錯題本 <small>${S.mistakes.length} 題</small></h3>
@@ -209,8 +233,9 @@ function Home(el) {
 
 /* ================= 單字 ================= */
 const deckName = w => {
+  if (S.flags?.[w.w]?.past) return "歷屆錯" + (S.flags[w.w].src ? " · " + S.flags[w.w].src : "");
   const sub = SUBS[w.tag]?.find(([n]) => n === w.sub)?.[1];
-  const short = { AWL: "AWL", L7000: "7000", TOEFL: "托福", IE: "工工", MINE: "我的錯題" }[w.tag] || w.tag;
+  const short = { AWL: "AWL", L7000: "7000", TOEFL: "托福", IE: "工工", MINE: "我的單字", PH: "片語" }[w.tag] || w.tag;
   return sub ? `${short} · ${sub}` : short;
 };
 function Vocab(el, mode, deck = "ALL") {
@@ -235,6 +260,7 @@ function Vocab(el, mode, deck = "ALL") {
       <button class="cta half" id="go-cards">翻卡複習</button>
       <button class="cta half alt" id="go-quiz">選擇題</button>
     </div>
+    <a class="ghost block" href="#add">＋ 手動新增單字 / 片語</a>
     <div class="setting"><span>每日新字</span><select id="npd">${[20, 40, 60, 80, 100].map(n => `<option ${S.settings.newPerDay === n ? "selected" : ""}>${n}</option>`).join("")}</select></div>
     <input class="search" id="q" placeholder="搜尋單字或中文…">
     <ul class="wlist" id="wl"></ul>`;
@@ -275,7 +301,7 @@ function Flash(el, deck = "ALL") {
       <div class="topbar"><a href="#vocab-list-${deck}" class="back">‹</a><div class="prog"><i style="width:${total ? done / (total + done) * 100 : 0}%"></i></div><span class="muted">${queue.length}</span></div>
       <div class="flash" id="fc">
         <div class="face front">
-          ${isNew ? `<span class="pill new">NEW</span>` : ""}<span class="pill">${esc(deckName(w))}</span>
+          ${isNew ? `<span class="pill new">NEW</span>` : ""}<span class="pill ${S.flags?.[w.w]?.past ? "badc" : ""}">${esc(deckName(w))}</span>
           <div class="word">${esc(w.w)}</div><div class="pos">${esc(w.pos)}</div>
           <button class="icon big" id="sp">🔊</button>
           ${isNew ? `<button class="known" id="known">我早就會了 ✓</button>` : ""}
@@ -413,9 +439,10 @@ function Grammar(el, id) {
     ${S.mistakes.some(m => m.opts) ? `<button class="ghost block" onclick="location.hash='#grammar-mistakes'">重刷錯題本</button>` : ""}`;
 }
 
-function Quiz(el, t, back, kind = "文法") {
+function Quiz(el, t, back, kind = "文法", onAnswer) {
   const qs = shuffle(t.qs);
   let n = 0, correct = 0;
+  if (!qs.length) { el.innerHTML = `<div class="done"><h2>沒有題目</h2><a class="ghost block" href="${back}">返回</a></div>`; return; }
   const next = () => {
     if (n >= qs.length) {
       el.innerHTML = `<div class="done"><div class="big">${correct / qs.length >= 0.8 ? "💪" : "📚"}</div><h2>${correct} / ${qs.length}</h2>
@@ -431,6 +458,7 @@ function Quiz(el, t, back, kind = "文法") {
       const b = e.target.closest("button"); if (!b || el.querySelector(".opts.locked")) return;
       el.querySelector(".opts").classList.add("locked");
       const i = +b.dataset.i, ok = i === q.a;
+      if (onAnswer) onAnswer(q, ok);
       el.querySelectorAll(".opts button")[q.a].classList.add("ok");
       if (!ok) { b.classList.add("bad"); addMistake({ kind, q: q.q, opts: q.opts, a: q.a, ex: q.ex }); }
       else { correct++; S.mistakes = S.mistakes.filter(m => m.q !== q.q); }
@@ -481,17 +509,26 @@ function hl(p, vocab) {
 }
 
 /* ================= 匯入考卷（Gemini） ================= */
+const SCHOOLS = ["台大", "清大", "交大", "台科大", "其他"];
 function Import(el) {
   const st = S.settings;
-  el.innerHTML = `<h2 class="title">匯入考卷</h2>
-    <p class="muted">上傳寫過的題目（PDF / 照片 / 貼文字），AI 會挑出你錯的、不確定的、可以延伸的知識點，變成單字卡和題目。</p>
+  const years = [...Array(10)].map((_, i) => 115 - i);
+  el.innerHTML = `<h2 class="title">上傳歷屆考卷</h2>
+    <div class="seg"><a href="#past">錯題專區</a><a href="#import" class="on">上傳分析</a></div>
+    <p class="muted">上傳寫過的歷屆考題（PDF / 照片 / 貼文字）。AI 會：<br>
+      ① 把你錯的題目收進「歷屆錯題專區」<br>
+      ② 錯的單字／片語：<b>字庫已經有的直接排進今天複習</b>，沒有的才新增<br>
+      ③ 從錯誤延伸出類似題</p>
     <div class="card-box">
-      <h3>1. 上傳</h3>
+      <h3>1. 哪一份考卷</h3>
+      <div class="row"><select class="search half" id="school">${SCHOOLS.map(x => `<option>${x}</option>`).join("")}</select>
+        <select class="search half" id="year">${years.map(y => `<option>${y}</option>`).join("")}</select></div>
+      <h3>2. 上傳</h3>
       <label class="drop" id="drop"><input type="file" id="file" accept="application/pdf,image/*" hidden><span id="fname">📄 點此選擇 PDF 或拍照</span></label>
       <textarea id="txt" rows="4" placeholder="或直接貼上題目與你的答案…"></textarea>
-      <h3>2. 補充說明（選填）</h3>
-      <input class="search" id="note" placeholder="例：第 3、7 題錯，第 12 題用猜的">
-      <button class="cta" id="go">✨ AI 分析並出題</button>
+      <h3>3. 補充說明（選填）</h3>
+      <input class="search" id="note" placeholder="例：第 3、7 題錯，第 12 題用猜的；正確答案 1-10: BCADA…">
+      <button class="cta" id="go">✨ AI 分析</button>
       <div id="out"></div>
     </div>
     <details class="card-box" ${st.geminiKey ? "" : "open"}>
@@ -507,27 +544,25 @@ function Import(el) {
   $("#go").onclick = async () => {
     if (!st.geminiKey) { toast("請先設定 Gemini API Key"); return; }
     if (!file && !$("#txt").value.trim()) { toast("請上傳檔案或貼上文字"); return; }
-    const out = $("#out");
+    const out = $("#out"), src = `${$("#school").value} ${$("#year").value}`;
     out.innerHTML = `<div class="loading"><i></i>AI 分析中，約 10–30 秒…</div>`;
     $("#go").disabled = true;
-    try {
-      const res = await analyze(file, $("#txt").value, $("#note").value);
-      showResult(out, res);
-    } catch (e) {
-      out.innerHTML = `<div class="explain badc"><b>失敗</b> ${esc(/fetch/i.test(e.message) ? "無法連線到 Gemini（預覽版會擋外部連線，部署到正式網址後就能用）" : e.message)}</div>`;
-    } finally { $("#go").disabled = false; }
+    try { showResult(out, await analyze(file, $("#txt").value, $("#note").value), src); }
+    catch (e) { out.innerHTML = `<div class="explain badc"><b>失敗</b> ${esc(/fetch/i.test(e.message) ? "無法連線到 Gemini（預覽版會擋外部連線，部署到正式網址後就能用）" : e.message)}</div>`; }
+    finally { $("#go").disabled = false; }
   };
 }
 
 const PROMPT = `你是台灣研究所入學考試（台大、清大、交大、台科大 工業工程/工業管理所）的英文家教。
-以下是學生寫過的英文考題與他的作答。請：
-1. 找出學生「答錯」「不確定」的題目，以及「可以延伸」的知識點（同字根、同義字、易混淆字、同類文法）。
-2. 產出單字卡（vocab）：每個字附詞性、中文、一句學術/工工情境例句與中譯、同義字、常見搭配、字根。
-3. 產出文法/克漏字選擇題（questions）：仿照研究所考題難度，四個選項，附中文解析。
-4. 每項附 reason，說明為什麼挑這個（例如「第 3 題選錯」「延伸自 adapt/adopt 混淆」）。
-只輸出 JSON，格式：
-{"summary":"一段中文總結學生的弱點","vocab":[{"w":"","pos":"","zh":"","ex":"","exZh":"","syn":"","col":"","root":"","reason":""}],"questions":[{"q":"","opts":["","","",""],"a":0,"ex":"","reason":""}]}
-單字 5–15 個、題目 5–10 題。`;
+以下是學生寫過的歷屆英文考題與他的作答。請：
+1. wrong：列出學生「答錯」或「不確定」的每一題。保留原題目與選項，標出學生的答案與正確答案，用中文解析，並寫出考的知識點（point，例如「片語 take over」「假設語氣倒裝」「單字 mitigate」）。
+2. vocab：這些錯題牽涉到的單字（含正確答案與學生誤選的選項），以及值得延伸的同字根、同義、易混淆字。附詞性、中文、一句學術/工工情境例句與中譯。
+3. phrases：錯題牽涉到的片語（例如 take on / take over），附中文與例句。
+4. questions：從錯誤延伸的新選擇題（仿研究所難度，四個選項，附中文解析）。
+5. 每項附 reason（例如「第 3 題選錯」「延伸自 adapt/adopt 混淆」）。
+只輸出 JSON：
+{"summary":"中文總結弱點","wrong":[{"no":"題號","q":"題目","opts":["","","",""],"mine":0,"a":1,"ex":"解析","point":"知識點"}],"vocab":[{"w":"","pos":"","zh":"","ex":"","exZh":"","reason":""}],"phrases":[{"w":"","zh":"","ex":"","reason":""}],"questions":[{"q":"","opts":["","","",""],"a":0,"ex":"","reason":""}]}
+mine 與 a 是選項索引（0 開始）；學生沒作答或非選擇題時 mine 填 -1，opts 可為空陣列。`;
 
 async function analyze(file, text, note) {
   const parts = [{ text: PROMPT + (note ? `\n學生補充：${note}` : "") + (text ? `\n\n題目內容：\n${text}` : "") }];
@@ -553,31 +588,140 @@ async function gemini(parts) {
   catch { throw new Error("AI 回傳格式無法解析，請再試一次"); }
 }
 
-function showResult(out, res) {
-  const v = (res.vocab || []).filter(x => x.w && x.zh);
-  const q = (res.questions || []).filter(x => x.q && Array.isArray(x.opts) && x.opts.length === 4 && x.a >= 0 && x.a < 4);
+function showResult(out, res, src) {
+  const ok4 = x => Array.isArray(x.opts) && x.opts.length === 4 && x.a >= 0 && x.a < 4;
+  const wrong = (res.wrong || []).filter(x => x.q);
+  const items = [
+    ...(res.vocab || []).filter(x => x.w && x.zh).map(x => ({ ...x, kind: "v" })),
+    ...(res.phrases || []).filter(x => x.w && x.zh).map(x => ({ ...x, kind: "p" })),
+  ].map(x => ({ ...x, hit: findWord(x.w) }));
+  const q = (res.questions || []).filter(x => x.q && ok4(x));
+  const li = (x, i) => `<li><label><input type="checkbox" checked data-i="${i}"><div><b>${esc(x.w)}</b> ${esc(x.zh)}
+      ${x.hit ? `<span class="pill good">字庫已有 → 排入複習</span>` : `<span class="pill new">新增</span>`}${x.kind === "p" ? `<span class="pill">片語</span>` : ""}
+      <div class="muted small">${esc(x.reason || "")}</div></div></label></li>`;
   out.innerHTML = `
     ${res.summary ? `<div class="explain"><b>弱點分析</b> ${esc(res.summary)}</div>` : ""}
-    <h3>單字卡 <small>${v.length}</small></h3>
-    <ul class="pick">${v.map((x, i) => `<li><label><input type="checkbox" checked data-v="${i}"><div><b>${esc(x.w)}</b> ${esc(x.zh)}<div class="muted small">${esc(x.reason || "")}</div></div></label></li>`).join("")}</ul>
-    <h3>題目 <small>${q.length}</small></h3>
+    <h3>歷屆錯題 <small>${wrong.length} 題 → 存進錯題專區</small></h3>
+    <ul class="pick">${wrong.map((x, i) => `<li><label><input type="checkbox" checked data-w="${i}"><div>${esc(x.no ? x.no + ". " : "")}${esc(x.q)}<div class="muted small">${esc(x.point || "")}</div></div></label></li>`).join("")}</ul>
+    <h3>單字 / 片語 <small>${items.length}</small></h3>
+    <ul class="pick">${items.map(li).join("")}</ul>
+    <h3>延伸題 <small>${q.length}</small></h3>
     <ul class="pick">${q.map((x, i) => `<li><label><input type="checkbox" checked data-q="${i}"><div>${esc(x.q)}<div class="muted small">${esc(x.reason || "")}</div></div></label></li>`).join("")}</ul>
-    <button class="cta" id="addall">加入題庫</button>`;
+    <button class="cta" id="addall">全部存進題庫</button>`;
   $("#addall").onclick = () => {
-    let nv = 0, nq = 0;
-    out.querySelectorAll("input[data-v]:checked").forEach(c => {
-      const x = v[+c.dataset.v];
-      const ex = S.custom.findIndex(w => w.w.toLowerCase() === x.w.toLowerCase());
-      const card = { w: x.w, pos: x.pos || "", zh: x.zh, ex: x.ex || "", exZh: x.exZh || "", syn: x.syn || "", col: x.col || "", root: x.root || "", tag: "MINE" };
-      if (ex >= 0) S.custom[ex] = card; else if (!WORDS.some(w => w.w === x.w)) S.custom.push(card);
-      nv++;
+    let nw = 0, nNew = 0, nRev = 0, nq = 0;
+    out.querySelectorAll("input[data-w]:checked").forEach(c => {
+      const x = wrong[+c.dataset.w];
+      if (S.past.some(p => p.q === x.q)) return;
+      S.past.unshift({ id: Date.now() + "" + nw, src, no: x.no || "", q: x.q, opts: Array.isArray(x.opts) ? x.opts : [], mine: x.mine ?? -1, a: x.a ?? -1, ex: x.ex || "", point: x.point || "", t: Date.now(), done: 0 });
+      nw++;
+    });
+    out.querySelectorAll("input[data-i]:checked").forEach(c => {
+      const x = items[+c.dataset.i];
+      if (x.hit) { reviewNow(x.hit.w, src); nRev++; return; }
+      const card = { w: x.w.trim(), pos: x.kind === "p" ? "phr." : (x.pos || ""), zh: x.zh, ex: x.ex || "", exZh: x.exZh || "", tag: x.kind === "p" ? "PH" : "MINE", sub: 0, src: "upload" };
+      S.custom.push(card); reviewNow(card.w, src); nNew++;
     });
     out.querySelectorAll("input[data-q]:checked").forEach(c => {
       const x = q[+c.dataset.q];
       if (!S.customQs.some(y => y.q === x.q)) { S.customQs.push({ q: x.q, opts: x.opts, a: x.a, ex: x.ex || "" }); nq++; }
     });
-    save(); toast(`已加入 ${nv} 個單字、${nq} 題`);
-    out.innerHTML = `<div class="explain good"><b>完成</b> 單字已進入複習排程，題目在「文法 → 我的錯題延伸」。</div>`;
+    save();
+    out.innerHTML = `<div class="explain good"><b>完成</b> 錯題專區 +${nw}、字庫已有排入複習 ${nRev} 個、新增 ${nNew} 個、延伸題 +${nq}</div>
+      <div class="row"><a class="cta half" href="#past">看錯題專區</a><a class="cta half alt" href="#vocab-cards">馬上複習</a></div>`;
+  };
+}
+
+/* ================= 歷屆錯題專區 ================= */
+function Past(el, filter = "ALL", mode) {
+  const srcs = [...new Set(S.past.map(p => p.src))];
+  const list = S.past.filter(p => filter === "ALL" || p.src === filter);
+  const quizable = list.filter(p => p.opts?.length === 4 && p.a >= 0);
+  if (mode === "quiz") return Quiz(el, { qs: quizable.map(p => ({ q: p.q, opts: p.opts, a: p.a, ex: `${p.point ? "【" + p.point + "】" : ""}${p.ex}` })) }, `#past-${filter}`, "歷屆");
+  el.innerHTML = `<h2 class="title">歷屆錯題</h2>
+    <div class="seg"><a href="#past" class="on">錯題專區</a><a href="#import">上傳分析</a></div>
+    ${S.past.length ? `
+      <div class="chips" id="srcs"><button class="chip ${filter === "ALL" ? "on" : ""}" data-s="ALL">全部 ${S.past.length}</button>${srcs.map(x => `<button class="chip ${filter === x ? "on" : ""}" data-s="${esc(x)}">${esc(x)}</button>`).join("")}</div>
+      ${quizable.length ? `<button class="cta" id="redo">重做 ${quizable.length} 題選擇題</button>` : ""}
+      <ul class="plist">${list.map(p => `<li class="pastq">
+        <div class="row between"><span class="pill badc">${esc(p.src)}${p.no ? " 第 " + esc(p.no) + " 題" : ""}</span>${p.point ? `<span class="pill">${esc(p.point)}</span>` : ""}</div>
+        <div class="cloze">${esc(p.q)}</div>
+        ${p.opts?.length ? `<ol class="olist" type="A">${p.opts.map((o, i) => `<li class="${i === p.a ? "okc" : i === p.mine ? "badt" : ""}">${esc(o)}${i === p.a ? " ✓" : i === p.mine ? " ✗ 你的答案" : ""}</li>`).join("")}</ol>` : ""}
+        ${p.ex ? `<div class="explain">${esc(p.ex)}</div>` : ""}
+        <button class="icon small del" data-id="${esc(p.id)}">刪除</button></li>`).join("")}</ul>`
+      : `<div class="card-box center"><p class="muted">還沒有歷屆錯題。</p><a class="cta block" href="#import">上傳第一份考卷</a></div>`}`;
+  if ($("#srcs")) $("#srcs").onclick = e => { const b = e.target.closest(".chip"); if (b) location.hash = `#past-${encodeURIComponent(b.dataset.s)}`; };
+  if ($("#redo")) $("#redo").onclick = () => Past(el, filter, "quiz");
+  el.querySelectorAll(".del").forEach(b => b.onclick = () => { S.past = S.past.filter(p => p.id !== b.dataset.id); save(); Past(el, filter); });
+}
+
+/* ================= 片語專區 ================= */
+function Phrase(el, g) {
+  const all = allWords().filter(w => w.tag === "PH");
+  const groups = SUBS.PH.filter(([n]) => all.some(w => w.sub === n));
+  if (g !== undefined) {
+    const n = +g;
+    const pool = g === "all" ? all : all.filter(w => w.sub === n);
+    // 填空：選項優先用同組片語（同動詞），不夠再從其他組補
+    const qs = shuffle(pool.filter(w => w.cloze || w.ex)).slice(0, 10).map(w => {
+      const same = shuffle(all.filter(x => x.w !== w.w && x.sub === w.sub));
+      const other = shuffle(all.filter(x => x.w !== w.w && x.sub !== w.sub));
+      const opts = shuffle([w, ...[...same, ...other].slice(0, 3)]);
+      const q = w.cloze ? w.cloze.replace(/\[[^\]]+\]/g, "_____") : w.ex.replace(new RegExp(w.w.split(" ")[0] + "\\S*", "i"), "_____");
+      return { q, opts: opts.map(o => o.w), a: opts.indexOf(w), ex: `${w.w}：${w.zh}　｜　${w.ex}`, w: w.w };
+    });
+    return Quiz(el, { qs }, "#phrase", "片語", (q, ok) => { if (!S.cards[q.w]) S.cards[q.w] = { ease: 2.5, ivl: 0, reps: 0, lapses: 0, due: 0, first: today() }; rate(q.w, ok ? 2 : 0); });
+  }
+  el.innerHTML = `<h2 class="title">片語專區</h2>
+    <p class="muted">考古題的片語填空常把同一個動詞的片語放在一起考（take on / take over / take up…），這裡也照這樣出題。</p>
+    <div class="row"><a class="cta half" href="#phrase-all">全部隨機填空</a><a class="cta half alt" href="#vocab-cards-PH">翻卡背片語</a></div>
+    <a class="ghost block" href="#add-PH">＋ 新增我的片語</a>
+    <ul class="tlist">${groups.map(([n, name]) => {
+      const ws = all.filter(w => w.sub === n);
+      const learned = ws.filter(w => S.cards[w.w]).length;
+      return `<li><a href="#phrase-${n}"><b>${esc(name)}</b><small>${learned}/${ws.length}　${esc(ws.slice(0, 3).map(w => w.w).join(" · "))}</small><span>›</span></a></li>`;
+    }).join("")}</ul>`;
+}
+
+/* ================= 手動新增 ================= */
+function AddWord(el, kind = "W") {
+  const isPh = kind === "PH";
+  el.innerHTML = `<div class="topbar"><a href="${isPh ? "#phrase" : "#vocab"}" class="back">‹</a><b>手動新增</b><span></span></div>
+    <div class="seg"><a href="#add" class="${isPh ? "" : "on"}">單字</a><a href="#add-PH" class="${isPh ? "on" : ""}">片語</a></div>
+    <div class="card-box">
+      <input class="search" id="w" placeholder="${isPh ? "片語，例如 take over" : "單字，例如 mitigate"}" autocapitalize="off" autocomplete="off">
+      <div id="hint"></div>
+      ${isPh ? "" : `<input class="search" id="pos" placeholder="詞性（選填），例如 v.">`}
+      <input class="search" id="zh" placeholder="中文意思">
+      <textarea id="ex" rows="2" placeholder="例句（選填）"></textarea>
+      <input class="search" id="exZh" placeholder="例句翻譯（選填）">
+      ${S.settings.geminiKey ? `<button class="ghost block" id="ai">✨ AI 自動填寫中文與例句</button>` : `<p class="muted small">設定 Gemini Key 後可以自動填中文與例句</p>`}
+      <button class="cta" id="save">加入${isPh ? "片語" : "單字"}卡</button>
+    </div>
+    <p class="muted small">如果字庫裡已經有這個字，不會重複新增，會直接排進今天的複習。</p>`;
+  $("#w").oninput = () => {
+    const hit = findWord($("#w").value);
+    $("#hint").innerHTML = hit ? `<div class="explain good"><b>字庫已有</b> ${esc(hit.w)}：${esc(hit.zh)}（${esc(deckName(hit))}）</div>` : "";
+  };
+  if ($("#ai")) $("#ai").onclick = async () => {
+    const t = $("#w").value.trim(); if (!t) return toast("先輸入" + (isPh ? "片語" : "單字"));
+    $("#ai").disabled = true; $("#ai").textContent = "產生中…";
+    try {
+      const r = await gemini([{ text: `英文${isPh ? "片語" : "單字"}「${t}」。給研究所英文考生用：輸出 JSON {"pos":"詞性","zh":"最常考的中文意思（可多個，用；分隔）","ex":"一句學術或工業工程/管理情境例句，15-25 字","exZh":"例句中譯"}` }]);
+      if (!isPh && r.pos) $("#pos").value = r.pos;
+      $("#zh").value = r.zh || ""; $("#ex").value = r.ex || ""; $("#exZh").value = r.exZh || "";
+    } catch (e) { toast(/fetch/i.test(e.message) ? "無法連線 Gemini" : e.message); }
+    $("#ai").disabled = false; $("#ai").textContent = "✨ AI 自動填寫中文與例句";
+  };
+  $("#save").onclick = () => {
+    const t = $("#w").value.trim().replace(/\s+/g, " "), zh = $("#zh").value.trim();
+    if (!t) return toast("請輸入" + (isPh ? "片語" : "單字"));
+    const hit = findWord(t);
+    if (hit) { reviewNow(hit.w, "", false); save(); toast(`「${hit.w}」已在字庫，已排入今天複習`); return AddWord(el, kind); }
+    if (!zh) return toast("請輸入中文意思");
+    S.custom.push({ w: t, pos: isPh ? "phr." : $("#pos").value.trim(), zh, ex: $("#ex").value.trim(), exZh: $("#exZh").value.trim(), tag: isPh ? "PH" : "MINE", sub: 0, src: "manual" });
+    reviewNow(t, "", false);
+    save(); toast(`已加入「${t}」`); AddWord(el, kind);
   };
 }
 

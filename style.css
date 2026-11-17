@@ -146,3 +146,13 @@ details summary { cursor: pointer; list-style: none; display: flex; justify-cont
 .setting { display: flex; justify-content: space-between; align-items: center; background: var(--card); border-radius: 12px; padding: 10px 14px; margin: 6px 0; }
 .setting select { font: inherit; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
 .known { margin-top: 18px; padding: 8px 16px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); font-size: 14px; }
+
+/* 歷屆錯題 / 片語 */
+.row.between { justify-content: space-between; margin: 0 0 8px; }
+.pastq { gap: 8px; }
+.olist { margin: 6px 0; padding-left: 22px; }
+.olist li { padding: 3px 0; }
+.olist .okc { color: var(--good); font-weight: 700; }
+.olist .badt { color: var(--bad); text-decoration: line-through; }
+.del { align-self: flex-end; color: var(--muted); font-size: 13px; }
+select.search.half { flex: 1; width: auto; }
