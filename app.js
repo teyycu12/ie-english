@@ -541,10 +541,25 @@ function Import(el) {
       <input class="search" id="model" placeholder="模型名稱" value="${esc(st.model)}">
       <label class="small muted">備用模型（主要模型太忙時自動改用，選填）</label>
       <input class="search" id="fallback" placeholder="例如 AI Studio 列出的 Flash-Lite 模型名稱" value="${esc(st.fallback || "")}">
-      <button class="ghost" id="savek">儲存</button>
+      <div class="row"><button class="ghost" id="savek">儲存</button><button class="ghost" id="lsm">查詢可用模型</button></div>
+      <div id="mlist"></div>
+      ${st.lastGood ? `<p class="muted small">上次自動改用：${esc(st.lastGood)}</p>` : ""}
     </details>`;
   let file = null;
   $("#file").onchange = e => { file = e.target.files[0]; $("#fname").textContent = file ? "✅ " + file.name : "📄 點此選擇 PDF 或拍照"; };
+  $("#lsm").onclick = async () => {
+    st.geminiKey = $("#key").value.trim(); save();
+    if (!st.geminiKey) return toast("請先貼上 Key");
+    $("#mlist").innerHTML = `<div class="loading"><i></i>查詢中…</div>`;
+    try {
+      const names = await listModels(true);
+      $("#mlist").innerHTML = `<p class="muted small">點一下設為主要模型，長按設為備用模型</p><div class="chips">${names.map(n => `<button class="chip ${n === st.model ? "on" : ""}" data-m="${esc(n)}">${esc(n)}</button>`).join("")}</div>`;
+      $("#mlist").querySelectorAll(".chip").forEach(c => {
+        c.onclick = () => { $("#model").value = c.dataset.m; toast("已填入主要模型，記得按儲存"); };
+        c.oncontextmenu = e => { e.preventDefault(); $("#fallback").value = c.dataset.m; toast("已填入備用模型，記得按儲存"); };
+      });
+    } catch (e) { $("#mlist").innerHTML = `<div class="explain badc">${esc(e.message)}</div>`; }
+  };
   $("#savek").onclick = () => { st.geminiKey = $("#key").value.trim(); st.model = $("#model").value.trim() || "gemini-3.8-flash"; st.fallback = $("#fallback").value.trim(); save(); toast("已儲存"); render(); };
   $("#go").onclick = async () => {
     if (!st.geminiKey) { toast("請先設定 Gemini API Key"); return; }
@@ -579,39 +594,73 @@ async function analyze(file, text, note) {
   return gemini(parts);
 }
 
-// 忙碌（503 / 429 / high demand）時自動重試，最後再試備用模型
+// 忙碌（503 / 429 / high demand）時自動重試；還是不行就自動換其他可用的 Flash 模型
 const BUSY = (status, msg) => status === 503 || status === 429 || status === 500 || /high demand|overload|unavailable|try again/i.test(msg || "");
+const GONE = (status, msg) => status === 404 || /not found|no longer available|not supported|deprecated/i.test(msg || "");
+const API = "https://generativelanguage.googleapis.com/v1beta";
 async function callModel(model, parts) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-  const r = await fetch(url, {
+  const r = await fetch(`${API}/models/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": S.settings.geminiKey },
     body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", temperature: 0.4 } }),
   });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) { const e = new Error(j.error?.message || `HTTP ${r.status}`); e.busy = BUSY(r.status, j.error?.message); throw e; }
+  if (!r.ok) {
+    const m = j.error?.message || `HTTP ${r.status}`, e = new Error(m);
+    e.busy = BUSY(r.status, m); e.gone = GONE(r.status, m);
+    throw e;
+  }
   return j;
 }
+// 向 Google 查詢這把 Key 能用的模型（快取一天）
+async function listModels(force) {
+  const c = S.modelList;
+  if (!force && c && Date.now() - c.t < DAY && c.names?.length) return c.names;
+  const r = await fetch(`${API}/models?pageSize=200`, { headers: { "x-goog-api-key": S.settings.geminiKey } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error?.message || `HTTP ${r.status}`);
+  const names = (j.models || [])
+    .filter(m => (m.supportedGenerationMethods || []).includes("generateContent"))
+    .map(m => m.name.replace(/^models\//, ""))
+    .filter(n => /gemini/i.test(n) && !/image|tts|audio|live|embed|vision-only|robotics|computer/i.test(n));
+  S.modelList = { t: Date.now(), names }; save();
+  return names;
+}
+const ver = n => parseFloat((n.match(/(\d+(?:\.\d+)?)/) || [0, 0])[1]);
+async function candidates() {
+  const st = S.settings;
+  const first = st.lastGood && Date.now() - (st.lastGoodAt || 0) < 3 * 3600e3 ? [st.lastGood] : [];
+  let auto = [];
+  try {
+    auto = (await listModels()).filter(n => /flash/i.test(n))
+      .sort((a, b) => (/lite/i.test(b) - /lite/i.test(a)) || ver(b) - ver(a) || (/preview|exp/i.test(a) - /preview|exp/i.test(b)));
+  } catch {}
+  return [...new Set([...first, st.model, st.fallback, ...auto].filter(Boolean))].slice(0, 5);
+}
 async function gemini(parts) {
-  const models = [S.settings.model, S.settings.fallback].filter(Boolean);
-  const waits = [2, 5, 10];
+  const list = await candidates();
   let lastErr;
-  for (const model of models) {
+  for (const [k, model] of list.entries()) {
+    const waits = k === 0 ? [2, 5] : [3];
     for (let i = 0; i <= waits.length; i++) {
       try {
         const j = await callModel(model, parts);
+        if (model !== S.settings.model) { S.settings.lastGood = model; S.settings.lastGoodAt = Date.now(); save(); }
         const t = j.candidates?.[0]?.content?.parts?.map(p => p.text).join("") || "";
         try { return JSON.parse(t.replace(/^```json|```$/g, "").trim()); }
-        catch { throw new Error("AI 回傳格式無法解析，請再試一次"); }
+        catch { throw Object.assign(new Error("AI 回傳格式無法解析，請再試一次"), { final: 1 }); }
       } catch (e) {
+        if (e.final) throw e;
         lastErr = e;
-        if (!e.busy) throw e;
-        if (i < waits.length) { toast(`Gemini 忙碌中，${waits[i]} 秒後自動重試（${i + 1}/${waits.length}）`); await new Promise(r => setTimeout(r, waits[i] * 1000)); }
+        if (!e.busy && !e.gone) throw e;           // Key 錯誤等，換模型也沒用
+        if (e.gone || i === waits.length) break;   // 這個模型不能用或重試完 → 換下一個
+        toast(`${model} 忙碌中，${waits[i]} 秒後重試`);
+        await new Promise(r => setTimeout(r, waits[i] * 1000));
       }
     }
-    if (models.length > 1 && model === models[0]) toast(`改用備用模型 ${models[1]}`);
+    if (list[k + 1]) toast(`改用 ${list[k + 1]}`);
   }
-  throw new Error(`Gemini 目前太忙（${lastErr?.message || "high demand"}）。請過幾分鐘再試${S.settings.fallback ? "" : "，或在 Gemini 設定填一個備用模型"}。`);
+  throw new Error(`所有可用模型都在忙（${lastErr?.message || "high demand"}）。請過幾分鐘再試。`);
 }
 
 function showResult(out, res, src) {
