@@ -112,7 +112,7 @@ function Home(el) {
   const max = Math.max(10, ...week.map(x => x.n));
   el.innerHTML = `
     <header class="hero">
-      <div class="eyebrow">工工所英文 · 目標 70+</div>
+      <div class="eyebrow">工工所英文 · 目標 80+</div>
       <h1>今天也來刷一輪</h1>
       <div class="streak">🔥 連續 <b>${S.streak.n}</b> 天</div>
     </header>
@@ -265,7 +265,7 @@ function VocabQuiz(el) {
   const pool = shuffle(ws).slice(0, N);
   const next = () => {
     if (n >= N) {
-      el.innerHTML = `<div class="done"><div class="big">${correct >= 7 ? "💪" : "📚"}</div><h2>${correct} / ${N}</h2><p class="muted">${correct >= 7 ? "達標 7 成！" : "還差一點，錯的字已加入複習。"}</p>
+      el.innerHTML = `<div class="done"><div class="big">${correct >= 8 ? "💪" : "📚"}</div><h2>${correct} / ${N}</h2><p class="muted">${correct >= 8 ? "達標 8 成！" : "還差一點，錯的字已加入複習。"}</p>
         <button class="cta" onclick="rerender()">再一輪</button><a class="ghost block" href="#home">回首頁</a></div>`;
       return;
     }
@@ -324,7 +324,7 @@ function Quiz(el, t, back, kind = "文法") {
   let n = 0, correct = 0;
   const next = () => {
     if (n >= qs.length) {
-      el.innerHTML = `<div class="done"><div class="big">${correct / qs.length >= 0.7 ? "💪" : "📚"}</div><h2>${correct} / ${qs.length}</h2>
+      el.innerHTML = `<div class="done"><div class="big">${correct / qs.length >= 0.8 ? "💪" : "📚"}</div><h2>${correct} / ${qs.length}</h2>
         <p class="muted">正確率 ${Math.round(correct / qs.length * 100)}%</p><a class="cta block" href="${back}">完成</a></div>`;
       touchStreak(); save(); return;
     }
