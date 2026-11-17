@@ -1,5 +1,7 @@
 import { WORDS } from "./data/words.js";
 import { AWL } from "./data/awl.js";
+import { L7000 } from "./data/l7000.js";
+import { TOEFL, TOEFL_THEMES } from "./data/toefl.js";
 import { GRAMMAR } from "./data/grammar.js";
 import { READINGS, WRITING } from "./data/articles.js";
 
@@ -27,26 +29,39 @@ const $ = sel => document.querySelector(sel);
 /* ---- 單字庫：依優先順序排列（新卡會照這個順序出） ---- */
 const DECKS = [
   { id: "MINE", name: "我的錯題字", desc: "從你上傳的考卷挑出", pri: 0 },
-  { id: "L7000", name: "高中 7000（L5–6）", desc: "台科主力、臺清交基礎", pri: 1 },
+  { id: "L7000", name: "高中 7000（L5–6）", desc: "台科主力、臺清交基礎 · 例句由 AI 補", pri: 1 },
   { id: "AWL", name: "AWL 學術字彙", desc: "570 字族 · 四校共通核心", pri: 2 },
-  { id: "TOEFL", name: "托福核心", desc: "臺清交閱讀測驗", pri: 3 },
+  { id: "TOEFL", name: "托福核心", desc: "依閱讀常見主題分類", pri: 3 },
   { id: "IE", name: "工工領域", desc: "閱讀常見專業術語", pri: 4 },
 ];
 const PRI = Object.fromEntries(DECKS.map(d => [d.id, d.pri]));
 const extra = Object.fromEntries(WORDS.filter(w => w.tag === "AWL").map(w => [w.w, w]));
+// 重複字的歸屬：AWL > 托福 > 工工 > 高中 7000（前面的有例句）
 const BASE = (() => {
-  const seen = new Set(), out = [];
-  for (const w of [...AWL.map(a => ({ ...a, ...(extra[a.w] ? { syn: extra[a.w].syn, col: extra[a.w].col, root: extra[a.w].root } : {}) })), ...WORDS.filter(w => w.tag !== "AWL")])
-    if (!seen.has(w.w)) { seen.add(w.w); out.push(w); }
+  const seen = new Map(), out = [];
+  const awl = AWL.map(a => ({ ...a, ...(extra[a.w] ? { syn: extra[a.w].syn, col: extra[a.w].col, root: extra[a.w].root } : {}) }));
+  const others = WORDS.filter(w => w.tag !== "AWL").map(w => w.tag === "TOEFL" ? { ...w, sub: 0 } : w);
+  for (const w of [...awl, ...TOEFL, ...others, ...L7000]) {
+    const k = w.w.toLowerCase();
+    if (!seen.has(k)) { seen.set(k, w); out.push(w); }
+  }
   return out;
 })();
+const SUBS = {
+  AWL: [...Array(10)].map((_, i) => [i + 1, `Sublist ${i + 1}`]),
+  L7000: [[5, "Level 5"], [6, "Level 6"]],
+  TOEFL: [...TOEFL_THEMES.map((t, i) => [i, t]).slice(1), [0, "綜合"]],
+};
 const allWords = () => {
   const base = new Set(BASE.map(w => w.w));
   return [...S.custom.filter(w => !base.has(w.w)), ...BASE]
-    .sort((a, b) => (PRI[a.tag] ?? 9) - (PRI[b.tag] ?? 9) || (a.sub || 0) - (b.sub || 0));
+    .sort((a, b) => (PRI[a.tag] ?? 9) - (PRI[b.tag] ?? 9) || (a.sub || 99) - (b.sub || 99));
 };
-const inDeck = (w, deck) => !deck || deck === "ALL" ? true
-  : deck.startsWith("AWL") && deck.length > 3 ? w.tag === "AWL" && w.sub === +deck.slice(3) : w.tag === deck;
+const inDeck = (w, deck) => {
+  if (!deck || deck === "ALL") return true;
+  const [id, n] = deck.split("_");
+  return w.tag === id && (n === undefined || w.sub === +n);
+};
 const shuffle = a => { a = [...a]; for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
 function touchStreak() {
@@ -193,7 +208,11 @@ function Home(el) {
 }
 
 /* ================= 單字 ================= */
-const deckName = w => w.tag === "AWL" ? `AWL ${w.sub}` : (DECKS.find(d => d.id === w.tag)?.name || w.tag);
+const deckName = w => {
+  const sub = SUBS[w.tag]?.find(([n]) => n === w.sub)?.[1];
+  const short = { AWL: "AWL", L7000: "7000", TOEFL: "托福", IE: "工工", MINE: "我的錯題" }[w.tag] || w.tag;
+  return sub ? `${short} · ${sub}` : short;
+};
 function Vocab(el, mode, deck = "ALL") {
   if (mode === "cards") return Flash(el, deck);
   if (mode === "quiz") return VocabQuiz(el, deck);
@@ -202,16 +221,16 @@ function Vocab(el, mode, deck = "ALL") {
   const deckRows = DECKS.map(d => {
     const st = deckStats(d.id);
     const pct = st.total ? Math.round(st.learned / st.total * 100) : 0;
-    return `<li class="deck ${deck === d.id ? "on" : ""}" data-d="${d.id}">
+    return `<li class="deck ${deck.split("_")[0] === d.id ? "on" : ""}" data-d="${d.id}">
       <div class="dtop"><b>${esc(d.name)}</b><small>${st.total ? `${st.learned}/${st.total}` : "準備中"}</small></div>
       <div class="muted small">${esc(d.desc)}</div>
       <div class="prog thin"><i style="width:${pct}%"></i></div></li>`;
   }).join("");
-  const subs = [...Array(10)].map((_, i) => i + 1);
+  const root = deck.split("_")[0];
   el.innerHTML = `
     <h2 class="title">單字</h2>
     <ul class="decks" id="decks"><li class="deck ${deck === "ALL" ? "on" : ""}" data-d="ALL"><div class="dtop"><b>全部（依優先順序）</b><small>${ws.length} 字</small></div></li>${deckRows}</ul>
-    ${deck.startsWith("AWL") ? `<div class="chips" id="subs"><button class="chip ${deck === "AWL" ? "on" : ""}" data-d="AWL">全部</button>${subs.map(n => `<button class="chip ${deck === "AWL" + n ? "on" : ""}" data-d="AWL${n}">Sublist ${n}</button>`).join("")}</div>` : ""}
+    ${SUBS[root] ? `<div class="chips" id="subs"><button class="chip ${deck === root ? "on" : ""}" data-d="${root}">全部</button>${SUBS[root].map(([n, name]) => `<button class="chip ${deck === root + "_" + n ? "on" : ""}" data-d="${root}_${n}">${esc(name)}</button>`).join("")}</div>` : ""}
     <div class="row">
       <button class="cta half" id="go-cards">翻卡複習</button>
       <button class="cta half alt" id="go-quiz">選擇題</button>
@@ -265,7 +284,7 @@ function Flash(el, deck = "ALL") {
         <div class="face bk">
           <div class="word sm">${esc(w.w)} <small>${esc(w.pos)}</small></div>
           <div class="zh">${esc(w.zh)}</div>
-          <div class="ex">${esc(w.ex)}</div><div class="muted">${esc(w.exZh)}</div>
+          <div id="exbox">${exHTML(w)}</div>
           ${w.col ? `<div class="meta"><b>搭配</b> ${esc(w.col)}</div>` : ""}
           ${w.syn ? `<div class="meta"><b>同義</b> ${esc(w.syn)}</div>` : ""}
           ${w.root ? `<div class="meta"><b>字根</b> ${esc(w.root)}</div>` : ""}
@@ -279,6 +298,8 @@ function Flash(el, deck = "ALL") {
       </div>
       <p class="muted center small">左滑＝不會 · 右滑＝會${isNew ? " · 高中就會的字按「我早就會了」跳過" : ""}</p>`;
     const fc = $("#fc");
+    const ab = $("#aiex");
+    if (ab) ab.onclick = async e => { e.stopPropagation(); ab.disabled = true; ab.textContent = "產生中…"; await fillExample(w); $("#exbox").innerHTML = exHTML(w); };
     $("#sp").onclick = e => { e.stopPropagation(); speak(w.w); };
     if ($("#known")) $("#known").onclick = e => {
       e.stopPropagation();
@@ -308,6 +329,20 @@ function Flash(el, deck = "ALL") {
   };
   show();
 }
+// 沒有例句的字（高中 7000）：用 Gemini 產生學術例句並存起來
+function exHTML(w) {
+  const ex = w.ex || S.exCache?.[w.w]?.ex;
+  if (ex) return `<div class="ex">${esc(ex)}</div><div class="muted">${esc(w.exZh || S.exCache[w.w]?.exZh || "")}</div>`;
+  return S.settings.geminiKey ? `<button class="known" id="aiex">✨ AI 產生學術例句</button>`
+    : `<p class="muted small">例句：到「匯入」頁設定 Gemini Key 後可自動產生</p>`;
+}
+async function fillExample(w) {
+  try {
+    const r = await gemini([{ text: `為英文單字「${w.w}」(${w.pos} ${w.zh}) 寫一句研究所入學考試程度的學術例句，情境偏工業工程、管理、科技或經濟，15–25 字。只輸出 JSON：{"ex":"英文例句","exZh":"中文翻譯"}` }]);
+    S.exCache = S.exCache || {};
+    S.exCache[w.w] = { ex: r.ex, exZh: r.exZh }; save();
+  } catch (e) { toast(/fetch/i.test(e.message) ? "無法連線 Gemini" : e.message); }
+}
 function ivlLabel(w, r) {
   const c = S.cards[w.w] || { ease: 2.5, ivl: 0, reps: 0 };
   let d = r === 1 ? Math.max(1, c.ivl * 1.2) : r === 2 ? (c.reps === 0 ? 1 : c.reps === 1 ? 3 : c.ivl * c.ease) : Math.max(4, (c.ivl || 1) * (c.ease + 0.15) * 1.3);
@@ -329,7 +364,7 @@ function VocabQuiz(el, deck = "ALL") {
       return;
     }
     const w = pool[n];
-    const mode = Math.random() < 0.5 ? "en2zh" : "cloze";
+    const mode = w.ex && Math.random() < 0.5 ? "cloze" : "en2zh";
     const opts = shuffle([w, ...shuffle(all.filter(x => x.w !== w.w && x.zh !== w.zh)).slice(0, 3)]);
     const q = mode === "en2zh" ? `<div class="word">${esc(w.w)}</div><div class="pos">${esc(w.pos)}</div>`
       : `<div class="cloze">${esc(w.ex.replace(new RegExp(w.w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\w*", "i"), "_____"))}</div>`;
@@ -348,7 +383,7 @@ function VocabQuiz(el, deck = "ALL") {
       else correct++;
       if (!S.cards[w.w]) S.cards[w.w] = { ease: 2.5, ivl: 0, reps: 0, lapses: 0, due: 0, first: today() };
       rate(w.w, ok ? 2 : 0);
-      $("#fb").innerHTML = `<div class="explain ${ok ? "good" : "badc"}"><b>${ok ? "答對" : "答錯"}</b> ${esc(w.w)}：${esc(w.zh)}<div class="ex">${esc(w.ex)}</div></div><button class="cta" id="nx">下一題</button>`;
+      $("#fb").innerHTML = `<div class="explain ${ok ? "good" : "badc"}"><b>${ok ? "答對" : "答錯"}</b> ${esc(w.w)}：${esc(w.zh)}${w.ex ? `<div class="ex">${esc(w.ex)}</div>` : ""}</div><button class="cta" id="nx">下一題</button>`;
       $("#nx").onclick = () => { n++; next(); };
     };
   };
@@ -501,6 +536,10 @@ async function analyze(file, text, note) {
     const b64 = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result.split(",")[1]); r.onerror = no; r.readAsDataURL(file); });
     parts.push({ inline_data: { mime_type: file.type || "application/pdf", data: b64 } });
   }
+  return gemini(parts);
+}
+
+async function gemini(parts) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(S.settings.model)}:generateContent`;
   const r = await fetch(url, {
     method: "POST",
