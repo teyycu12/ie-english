@@ -1,11 +1,12 @@
 import { WORDS } from "./data/words.js";
+import { AWL } from "./data/awl.js";
 import { GRAMMAR } from "./data/grammar.js";
 import { READINGS, WRITING } from "./data/articles.js";
 
 /* ================= 儲存 ================= */
 const KEY = "iee:v1";
 const DAY = 86400000;
-const NEW_PER_DAY = 20;
+const NEW_PER_DAY = 40;
 const defaults = () => ({
   cards: {}, custom: [], customQs: [], mistakes: [],
   streak: { last: "", n: 0 }, log: {},
@@ -16,13 +17,36 @@ function load() {
   try { return Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY)) || {}); }
   catch { return defaults(); }
 }
+if (!S.settings.v2) { if (S.settings.newPerDay === 20) S.settings.newPerDay = NEW_PER_DAY; S.settings.v2 = 1; }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} }
 if (navigator.storage?.persist) navigator.storage.persist();
 
 const today = () => new Date().toLocaleDateString("sv"); // YYYY-MM-DD
 const esc = (s = "") => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const $ = sel => document.querySelector(sel);
-const allWords = () => [...WORDS, ...S.custom];
+/* ---- 單字庫：依優先順序排列（新卡會照這個順序出） ---- */
+const DECKS = [
+  { id: "MINE", name: "我的錯題字", desc: "從你上傳的考卷挑出", pri: 0 },
+  { id: "L7000", name: "高中 7000（L5–6）", desc: "台科主力、臺清交基礎", pri: 1 },
+  { id: "AWL", name: "AWL 學術字彙", desc: "570 字族 · 四校共通核心", pri: 2 },
+  { id: "TOEFL", name: "托福核心", desc: "臺清交閱讀測驗", pri: 3 },
+  { id: "IE", name: "工工領域", desc: "閱讀常見專業術語", pri: 4 },
+];
+const PRI = Object.fromEntries(DECKS.map(d => [d.id, d.pri]));
+const extra = Object.fromEntries(WORDS.filter(w => w.tag === "AWL").map(w => [w.w, w]));
+const BASE = (() => {
+  const seen = new Set(), out = [];
+  for (const w of [...AWL.map(a => ({ ...a, ...(extra[a.w] ? { syn: extra[a.w].syn, col: extra[a.w].col, root: extra[a.w].root } : {}) })), ...WORDS.filter(w => w.tag !== "AWL")])
+    if (!seen.has(w.w)) { seen.add(w.w); out.push(w); }
+  return out;
+})();
+const allWords = () => {
+  const base = new Set(BASE.map(w => w.w));
+  return [...S.custom.filter(w => !base.has(w.w)), ...BASE]
+    .sort((a, b) => (PRI[a.tag] ?? 9) - (PRI[b.tag] ?? 9) || (a.sub || 0) - (b.sub || 0));
+};
+const inDeck = (w, deck) => !deck || deck === "ALL" ? true
+  : deck.startsWith("AWL") && deck.length > 3 ? w.tag === "AWL" && w.sub === +deck.slice(3) : w.tag === deck;
 const shuffle = a => { a = [...a]; for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
 function touchStreak() {
@@ -52,6 +76,17 @@ function rate(word, r) {
   S.cards[word] = c;
   touchStreak(); save();
 }
+// 「我早就會」：直接排到 60 天後，不佔每日新字額度
+function markKnown(word) {
+  S.cards[word] = { ease: 2.8, ivl: 60, reps: 3, lapses: 0, due: Date.now() + 60 * DAY, known: 1 };
+  touchStreak(); save();
+}
+function deckStats(deck) {
+  const ws = allWords().filter(w => inDeck(w, deck));
+  let learned = 0, mastered = 0;
+  for (const w of ws) { const c = S.cards[w.w]; if (c) { learned++; if (c.ivl >= 21) mastered++; } }
+  return { total: ws.length, learned, mastered };
+}
 function newIntroducedToday() {
   return Object.values(S.cards).filter(c => c.first === today()).length;
 }
@@ -71,7 +106,7 @@ function stats() {
 function buildQueue(tag) {
   const now = Date.now();
   let ws = allWords();
-  if (tag && tag !== "ALL") ws = ws.filter(w => w.tag === tag);
+  ws = ws.filter(w => inDeck(w, tag));
   const due = ws.filter(w => S.cards[w.w] && S.cards[w.w].due <= now).sort((a, b) => S.cards[a.w].due - S.cards[b.w].due);
   const newLeft = Math.max(0, S.settings.newPerDay - newIntroducedToday());
   const fresh = ws.filter(w => !S.cards[w.w]).slice(0, newLeft);
@@ -158,39 +193,53 @@ function Home(el) {
 }
 
 /* ================= 單字 ================= */
-function Vocab(el, mode) {
-  if (mode === "cards") return Flash(el);
-  if (mode === "quiz") return VocabQuiz(el);
-  const tags = [["ALL", "全部"], ["AWL", "學術字彙 AWL"], ["IE", "工工領域"], ["GRE", "GRE/TOEFL"], ["MINE", "我的錯題字"]];
+const deckName = w => w.tag === "AWL" ? `AWL ${w.sub}` : (DECKS.find(d => d.id === w.tag)?.name || w.tag);
+function Vocab(el, mode, deck = "ALL") {
+  if (mode === "cards") return Flash(el, deck);
+  if (mode === "quiz") return VocabQuiz(el, deck);
+  if (mode && mode !== "list") deck = mode;
   const ws = allWords();
+  const deckRows = DECKS.map(d => {
+    const st = deckStats(d.id);
+    const pct = st.total ? Math.round(st.learned / st.total * 100) : 0;
+    return `<li class="deck ${deck === d.id ? "on" : ""}" data-d="${d.id}">
+      <div class="dtop"><b>${esc(d.name)}</b><small>${st.total ? `${st.learned}/${st.total}` : "準備中"}</small></div>
+      <div class="muted small">${esc(d.desc)}</div>
+      <div class="prog thin"><i style="width:${pct}%"></i></div></li>`;
+  }).join("");
+  const subs = [...Array(10)].map((_, i) => i + 1);
   el.innerHTML = `
     <h2 class="title">單字</h2>
+    <ul class="decks" id="decks"><li class="deck ${deck === "ALL" ? "on" : ""}" data-d="ALL"><div class="dtop"><b>全部（依優先順序）</b><small>${ws.length} 字</small></div></li>${deckRows}</ul>
+    ${deck.startsWith("AWL") ? `<div class="chips" id="subs"><button class="chip ${deck === "AWL" ? "on" : ""}" data-d="AWL">全部</button>${subs.map(n => `<button class="chip ${deck === "AWL" + n ? "on" : ""}" data-d="AWL${n}">Sublist ${n}</button>`).join("")}</div>` : ""}
     <div class="row">
-      <button class="cta half" onclick="location.hash='#vocab-cards'">翻卡複習</button>
-      <button class="cta half alt" onclick="location.hash='#vocab-quiz'">選擇題</button>
+      <button class="cta half" id="go-cards">翻卡複習</button>
+      <button class="cta half alt" id="go-quiz">選擇題</button>
     </div>
-    <div class="chips" id="tagchips">${tags.map(([t, n], i) => `<button class="chip ${i ? "" : "on"}" data-t="${t}">${n}</button>`).join("")}</div>
+    <div class="setting"><span>每日新字</span><select id="npd">${[20, 40, 60, 80, 100].map(n => `<option ${S.settings.newPerDay === n ? "selected" : ""}>${n}</option>`).join("")}</select></div>
     <input class="search" id="q" placeholder="搜尋單字或中文…">
     <ul class="wlist" id="wl"></ul>`;
-  let tag = "ALL";
+  const pick = d => location.hash = `#vocab-list-${d}`;
+  $("#decks").onclick = e => { const li = e.target.closest(".deck"); if (li) pick(li.dataset.d); };
+  if ($("#subs")) $("#subs").onclick = e => { const b = e.target.closest(".chip"); if (b) pick(b.dataset.d); };
+  $("#go-cards").onclick = () => location.hash = `#vocab-cards-${deck}`;
+  $("#go-quiz").onclick = () => location.hash = `#vocab-quiz-${deck}`;
+  $("#npd").onchange = e => { S.settings.newPerDay = +e.target.value; save(); toast(`每日新字改為 ${e.target.value}`); };
   const draw = () => {
     const q = $("#q").value.trim().toLowerCase();
-    const list = ws.filter(w => (tag === "ALL" || w.tag === tag) && (!q || w.w.toLowerCase().includes(q) || w.zh.includes(q)));
-    $("#wl").innerHTML = list.map(w => {
+    const list = ws.filter(w => inDeck(w, deck) && (!q || w.w.toLowerCase().includes(q) || w.zh.includes(q)));
+    $("#wl").innerHTML = list.slice(0, 150).map(w => {
       const c = S.cards[w.w];
       const lv = !c ? "new" : c.ivl >= 21 ? "good" : c.lapses > 1 ? "bad" : "mid";
       return `<li><i class="dot ${lv}"></i><div><b>${esc(w.w)}</b> <small>${esc(w.pos)}</small><div class="muted">${esc(w.zh)}</div></div><button class="icon" onclick="speak(${esc(JSON.stringify(w.w))})">🔊</button></li>`;
-    }).join("") || `<p class="muted center">沒有符合的單字</p>`;
-  };
-  $("#tagchips").onclick = e => {
-    const b = e.target.closest(".chip"); if (!b) return;
-    tag = b.dataset.t; document.querySelectorAll("#tagchips .chip").forEach(x => x.classList.toggle("on", x === b)); draw();
+    }).join("") + (list.length > 150 ? `<p class="muted center small">還有 ${list.length - 150} 個，請用搜尋</p>` : "")
+      || `<p class="muted center">${deck === "L7000" ? "高中 7000 字庫準備中" : "沒有符合的單字"}</p>`;
   };
   $("#q").oninput = draw; draw();
 }
 
-function Flash(el) {
-  let queue = buildQueue("ALL");
+function Flash(el, deck = "ALL") {
+  let queue = buildQueue(deck);
   let flipped = false;
   const total = queue.length;
   let done = 0;
@@ -204,12 +253,13 @@ function Flash(el) {
     const isNew = !S.cards[w.w];
     flipped = false;
     el.innerHTML = `
-      <div class="topbar"><a href="#vocab" class="back">‹</a><div class="prog"><i style="width:${total ? done / (total + done) * 100 : 0}%"></i></div><span class="muted">${queue.length}</span></div>
+      <div class="topbar"><a href="#vocab-list-${deck}" class="back">‹</a><div class="prog"><i style="width:${total ? done / (total + done) * 100 : 0}%"></i></div><span class="muted">${queue.length}</span></div>
       <div class="flash" id="fc">
         <div class="face front">
-          ${isNew ? `<span class="pill new">NEW</span>` : ""}<span class="pill">${esc(w.tag)}</span>
+          ${isNew ? `<span class="pill new">NEW</span>` : ""}<span class="pill">${esc(deckName(w))}</span>
           <div class="word">${esc(w.w)}</div><div class="pos">${esc(w.pos)}</div>
           <button class="icon big" id="sp">🔊</button>
+          ${isNew ? `<button class="known" id="known">我早就會了 ✓</button>` : ""}
           <div class="hint">點一下翻面</div>
         </div>
         <div class="face bk">
@@ -227,9 +277,16 @@ function Flash(el) {
         <button data-r="2" class="r2">會<small>${ivlLabel(w, 2)}</small></button>
         <button data-r="3" class="r3">太簡單<small>${ivlLabel(w, 3)}</small></button>
       </div>
-      <p class="muted center small">左滑＝不會 · 右滑＝會</p>`;
+      <p class="muted center small">左滑＝不會 · 右滑＝會${isNew ? " · 高中就會的字按「我早就會了」跳過" : ""}</p>`;
     const fc = $("#fc");
     $("#sp").onclick = e => { e.stopPropagation(); speak(w.w); };
+    if ($("#known")) $("#known").onclick = e => {
+      e.stopPropagation();
+      queue.shift(); markKnown(w.w);
+      const next = allWords().find(x => inDeck(x, deck) && !S.cards[x.w] && !queue.includes(x));
+      if (next) queue.push(next);
+      show();
+    };
     fc.onclick = () => { flipped = !flipped; fc.classList.toggle("flip", flipped); if (flipped) $("#rates").classList.add("show"); };
     $("#rates").onclick = e => { const b = e.target.closest("button"); if (b && flipped) answer(+b.dataset.r); };
     // 滑動手勢
@@ -258,8 +315,10 @@ function ivlLabel(w, r) {
   return d >= 30 ? `${Math.round(d / 30)} 個月` : `${d} 天`;
 }
 
-function VocabQuiz(el) {
-  const ws = allWords();
+function VocabQuiz(el, deck = "ALL") {
+  const all = allWords().filter(w => inDeck(w, deck));
+  const seen = all.filter(w => S.cards[w.w] && !S.cards[w.w].known);
+  const ws = seen.length >= 10 ? seen : all;
   let n = 0, correct = 0;
   const N = 10;
   const pool = shuffle(ws).slice(0, N);
@@ -271,7 +330,7 @@ function VocabQuiz(el) {
     }
     const w = pool[n];
     const mode = Math.random() < 0.5 ? "en2zh" : "cloze";
-    const opts = shuffle([w, ...shuffle(ws.filter(x => x.w !== w.w)).slice(0, 3)]);
+    const opts = shuffle([w, ...shuffle(all.filter(x => x.w !== w.w && x.zh !== w.zh)).slice(0, 3)]);
     const q = mode === "en2zh" ? `<div class="word">${esc(w.w)}</div><div class="pos">${esc(w.pos)}</div>`
       : `<div class="cloze">${esc(w.ex.replace(new RegExp(w.w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\w*", "i"), "_____"))}</div>`;
     el.innerHTML = `

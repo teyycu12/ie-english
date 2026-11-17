@@ -1,10 +1,10 @@
-// 單字庫：AWL 學術字彙、IE 工工領域字、GRE/TOEFL 高頻字
+// 補充字庫：工工領域字、托福核心字；標 AWL 的條目會把搭配/同義/字根併入 awl.js 的同名字
 // 欄位：w 單字, pos 詞性, zh 中文, ex 例句, exZh 例句翻譯, syn 同義字, col 常見搭配, root 字根, tag 分類
 export const WORDS = [
   // ---- AWL 學術字彙 ----
   { w: "allocate", pos: "v.", zh: "分配；配置", ex: "The model allocates limited resources to minimize total cost.", exZh: "此模型分配有限資源以最小化總成本。", syn: "assign, distribute", col: "allocate resources / budget", root: "al- (to) + loc (place)", tag: "AWL" },
   { w: "assess", pos: "v.", zh: "評估", ex: "We assess supplier performance using a weighted scoring method.", exZh: "我們用加權評分法評估供應商績效。", syn: "evaluate, appraise", col: "assess the impact / risk", root: "", tag: "AWL" },
-  { w: "constraint", pos: "n.", zh: "限制；約束條件", ex: "The capacity constraint becomes binding when demand exceeds 500 units.", exZh: "當需求超過 500 單位時，產能限制變成緊限制。", syn: "limitation, restriction", col: "budget constraint / impose a constraint", root: "con- + strain (tighten)", tag: "AWL" },
+  { w: "constraint", pos: "n.", zh: "限制；約束條件", ex: "The capacity constraint becomes binding when demand exceeds 500 units.", exZh: "當需求超過 500 單位時，產能限制變成緊限制。", syn: "limitation, restriction", col: "budget constraint / impose a constraint", root: "con- + strain (tighten)", tag: "IE" },
   { w: "derive", pos: "v.", zh: "推導；源自", ex: "The optimal order quantity is derived from the total cost function.", exZh: "最佳訂購量由總成本函數推導而來。", syn: "obtain, deduce", col: "derive from", root: "", tag: "AWL" },
   { w: "empirical", pos: "adj.", zh: "實證的；經驗的", ex: "Empirical evidence suggests that lean practices improve productivity.", exZh: "實證證據顯示精實做法能提升生產力。", syn: "observational, experimental", col: "empirical study / evidence", root: "", tag: "AWL" },
   { w: "framework", pos: "n.", zh: "架構；框架", ex: "This study proposes a framework for evaluating smart factory readiness.", exZh: "本研究提出一個評估智慧工廠成熟度的架構。", syn: "structure, model", col: "theoretical / conceptual framework", root: "", tag: "AWL" },
@@ -14,7 +14,7 @@ export const WORDS = [
   { w: "interpret", pos: "v.", zh: "解讀；詮釋", ex: "The regression coefficients should be interpreted with caution.", exZh: "迴歸係數應謹慎解讀。", syn: "explain, construe", col: "interpret the results / data", root: "", tag: "AWL" },
   { w: "mechanism", pos: "n.", zh: "機制", ex: "An incentive mechanism aligns the interests of the retailer and the supplier.", exZh: "激勵機制使零售商與供應商的利益一致。", syn: "process, system", col: "coordination / feedback mechanism", root: "", tag: "AWL" },
   { w: "subsequent", pos: "adj.", zh: "隨後的；後續的", ex: "Subsequent experiments confirmed the initial findings.", exZh: "後續實驗證實了最初的發現。", syn: "following, later", col: "subsequent analysis / to", root: "sub- (under/after) + sequi (follow)", tag: "AWL" },
-  { w: "substantial", pos: "adj.", zh: "大量的；相當大的", ex: "The new layout led to a substantial reduction in travel distance.", exZh: "新佈置使搬運距離大幅減少。", syn: "considerable, significant", col: "substantial increase / evidence", root: "", tag: "AWL" },
+  { w: "substantial", pos: "adj.", zh: "大量的；相當大的", ex: "The new layout led to a substantial reduction in travel distance.", exZh: "新佈置使搬運距離大幅減少。", syn: "considerable, significant", col: "substantial increase / evidence", root: "", tag: "TOEFL" },
   { w: "sufficient", pos: "adj.", zh: "足夠的；充分的", ex: "This condition is necessary but not sufficient for optimality.", exZh: "這個條件是最佳性的必要條件但非充分條件。", syn: "adequate, enough", col: "necessary and sufficient", root: "", tag: "AWL" },
   { w: "undertake", pos: "v.", zh: "從事；承擔", ex: "A pilot study was undertaken before full-scale deployment.", exZh: "在全面導入前先進行了先導研究。", syn: "carry out, embark on", col: "undertake research / a project", root: "", tag: "AWL" },
   { w: "valid", pos: "adj.", zh: "有效的；合理的", ex: "The model is valid only under the assumption of constant demand.", exZh: "此模型只在需求固定的假設下成立。", syn: "sound, legitimate", col: "valid assumption / argument", root: "", tag: "AWL" },
@@ -39,19 +39,19 @@ export const WORDS = [
   { w: "lead time", pos: "n.", zh: "前置時間", ex: "Shorter lead times allow firms to respond quickly to demand changes.", exZh: "較短的前置時間讓企業能快速回應需求變化。", syn: "", col: "replenishment lead time", root: "", tag: "IE" },
   { w: "simulation", pos: "n.", zh: "模擬", ex: "Discrete-event simulation was used to evaluate alternative layouts.", exZh: "使用離散事件模擬評估不同佈置方案。", syn: "", col: "Monte Carlo / discrete-event simulation", root: "", tag: "IE" },
 
-  // ---- GRE / TOEFL 高頻 ----
-  { w: "ambiguous", pos: "adj.", zh: "模稜兩可的", ex: "The survey question was ambiguous, leading to inconsistent responses.", exZh: "問卷題目模稜兩可，導致回答不一致。", syn: "unclear, equivocal", col: "", root: "ambi- (both)", tag: "GRE" },
-  { w: "mitigate", pos: "v.", zh: "減輕；緩和", ex: "Dual sourcing can mitigate the risk of supply disruption.", exZh: "雙源採購能減輕供應中斷的風險。", syn: "alleviate, reduce", col: "mitigate risk / impact", root: "", tag: "GRE" },
-  { w: "robust", pos: "adj.", zh: "穩健的；強健的", ex: "The proposed schedule is robust to machine breakdowns.", exZh: "所提出的排程對機台故障具穩健性。", syn: "resilient, sturdy", col: "robust to / robust design", root: "", tag: "GRE" },
-  { w: "trade-off", pos: "n.", zh: "權衡；取捨", ex: "There is a trade-off between inventory cost and service level.", exZh: "存貨成本與服務水準之間存在取捨。", syn: "compromise", col: "a trade-off between A and B", root: "", tag: "GRE" },
-  { w: "unprecedented", pos: "adj.", zh: "前所未有的", ex: "The pandemic caused unprecedented disruptions to global logistics.", exZh: "疫情對全球物流造成前所未有的衝擊。", syn: "unparalleled", col: "unprecedented scale", root: "un- + precedent", tag: "GRE" },
-  { w: "exacerbate", pos: "v.", zh: "使惡化", ex: "Order batching may exacerbate the bullwhip effect.", exZh: "批量訂購可能使長鞭效應惡化。", syn: "worsen, aggravate", col: "exacerbate the problem", root: "acerbus (harsh)", tag: "GRE" },
-  { w: "pervasive", pos: "adj.", zh: "普遍的；無所不在的", ex: "Sensors have become pervasive in modern factories.", exZh: "感測器在現代工廠中已無所不在。", syn: "widespread, ubiquitous", col: "", root: "", tag: "GRE" },
-  { w: "scrutinize", pos: "v.", zh: "仔細檢查", ex: "Auditors scrutinize every step of the quality control process.", exZh: "稽核員仔細檢查品管流程的每個步驟。", syn: "examine, inspect", col: "", root: "", tag: "GRE" },
-  { w: "viable", pos: "adj.", zh: "可行的；能存活的", ex: "Remanufacturing is an economically viable alternative.", exZh: "再製造是經濟上可行的替代方案。", syn: "feasible", col: "commercially viable", root: "vita (life)", tag: "GRE" },
-  { w: "compelling", pos: "adj.", zh: "令人信服的", ex: "The authors present compelling evidence for their claim.", exZh: "作者為其主張提出令人信服的證據。", syn: "convincing, persuasive", col: "compelling evidence / argument", root: "", tag: "GRE" },
-  { w: "deteriorate", pos: "v.", zh: "惡化；退化", ex: "Machine performance deteriorates without preventive maintenance.", exZh: "沒有預防保養，機器性能會退化。", syn: "decline, degrade", col: "", root: "", tag: "GRE" },
-  { w: "intricate", pos: "adj.", zh: "錯綜複雜的", ex: "Global supply networks are increasingly intricate.", exZh: "全球供應網路日益錯綜複雜。", syn: "complex, elaborate", col: "", root: "", tag: "GRE" },
+  // ---- 托福 TOEFL 核心（之後擴充）----
+  { w: "ambiguous", pos: "adj.", zh: "模稜兩可的", ex: "The survey question was ambiguous, leading to inconsistent responses.", exZh: "問卷題目模稜兩可，導致回答不一致。", syn: "unclear, equivocal", col: "", root: "ambi- (both)", tag: "TOEFL" },
+  { w: "mitigate", pos: "v.", zh: "減輕；緩和", ex: "Dual sourcing can mitigate the risk of supply disruption.", exZh: "雙源採購能減輕供應中斷的風險。", syn: "alleviate, reduce", col: "mitigate risk / impact", root: "", tag: "TOEFL" },
+  { w: "robust", pos: "adj.", zh: "穩健的；強健的", ex: "The proposed schedule is robust to machine breakdowns.", exZh: "所提出的排程對機台故障具穩健性。", syn: "resilient, sturdy", col: "robust to / robust design", root: "", tag: "TOEFL" },
+  { w: "trade-off", pos: "n.", zh: "權衡；取捨", ex: "There is a trade-off between inventory cost and service level.", exZh: "存貨成本與服務水準之間存在取捨。", syn: "compromise", col: "a trade-off between A and B", root: "", tag: "TOEFL" },
+  { w: "unprecedented", pos: "adj.", zh: "前所未有的", ex: "The pandemic caused unprecedented disruptions to global logistics.", exZh: "疫情對全球物流造成前所未有的衝擊。", syn: "unparalleled", col: "unprecedented scale", root: "un- + precedent", tag: "TOEFL" },
+  { w: "exacerbate", pos: "v.", zh: "使惡化", ex: "Order batching may exacerbate the bullwhip effect.", exZh: "批量訂購可能使長鞭效應惡化。", syn: "worsen, aggravate", col: "exacerbate the problem", root: "acerbus (harsh)", tag: "TOEFL" },
+  { w: "pervasive", pos: "adj.", zh: "普遍的；無所不在的", ex: "Sensors have become pervasive in modern factories.", exZh: "感測器在現代工廠中已無所不在。", syn: "widespread, ubiquitous", col: "", root: "", tag: "TOEFL" },
+  { w: "scrutinize", pos: "v.", zh: "仔細檢查", ex: "Auditors scrutinize every step of the quality control process.", exZh: "稽核員仔細檢查品管流程的每個步驟。", syn: "examine, inspect", col: "", root: "", tag: "TOEFL" },
+  { w: "viable", pos: "adj.", zh: "可行的；能存活的", ex: "Remanufacturing is an economically viable alternative.", exZh: "再製造是經濟上可行的替代方案。", syn: "feasible", col: "commercially viable", root: "vita (life)", tag: "TOEFL" },
+  { w: "compelling", pos: "adj.", zh: "令人信服的", ex: "The authors present compelling evidence for their claim.", exZh: "作者為其主張提出令人信服的證據。", syn: "convincing, persuasive", col: "compelling evidence / argument", root: "", tag: "TOEFL" },
+  { w: "deteriorate", pos: "v.", zh: "惡化；退化", ex: "Machine performance deteriorates without preventive maintenance.", exZh: "沒有預防保養，機器性能會退化。", syn: "decline, degrade", col: "", root: "", tag: "TOEFL" },
+  { w: "intricate", pos: "adj.", zh: "錯綜複雜的", ex: "Global supply networks are increasingly intricate.", exZh: "全球供應網路日益錯綜複雜。", syn: "complex, elaborate", col: "", root: "", tag: "TOEFL" },
 ];
 
 // 易混淆字（延伸出題用）
