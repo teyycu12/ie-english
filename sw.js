@@ -1,6 +1,6 @@
 // 離線快取：先回快取、背景更新
-const CACHE = "iee-v1";
-const ASSETS = ["./", "index.html", "style.css", "app.js", "data/words.js", "data/grammar.js", "data/articles.js", "manifest.webmanifest", "icons/icon-180.png", "icons/icon-192.png"];
+const CACHE = "iee-v2";
+const ASSETS = ["./", "index.html", "style.css", "app.js", "data/words.js", "data/grammar.js", "data/articles.js", "data/awl.js", "data/l7000.js", "data/toefl.js", "data/phrases.js", "manifest.webmanifest", "icons/icon-180.png", "icons/icon-192.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS))); self.skipWaiting(); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== CACHE).map(k => caches.delete(k))))); self.clients.claim(); });
 self.addEventListener("fetch", e => {

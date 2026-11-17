@@ -13,13 +13,15 @@ const NEW_PER_DAY = 40;
 const defaults = () => ({
   cards: {}, custom: [], customQs: [], mistakes: [], past: [], flags: {},
   streak: { last: "", n: 0 }, log: {},
-  settings: { geminiKey: "", model: "gemini-2.5-flash", newPerDay: NEW_PER_DAY },
+  settings: { geminiKey: "", model: "gemini-3.8-flash", newPerDay: NEW_PER_DAY },
 });
 let S = load();
 function load() {
   try { return Object.assign(defaults(), JSON.parse(localStorage.getItem(KEY)) || {}); }
   catch { return defaults(); }
 }
+// 舊預設模型已停用，自動換成新的
+if (S.settings.model === "gemini-2.5-flash") S.settings.model = "gemini-3.8-flash";
 if (!S.settings.v2) { if (S.settings.newPerDay === 20) S.settings.newPerDay = NEW_PER_DAY; S.settings.v2 = 1; }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} }
 if (navigator.storage?.persist) navigator.storage.persist();
@@ -540,7 +542,7 @@ function Import(el) {
     </details>`;
   let file = null;
   $("#file").onchange = e => { file = e.target.files[0]; $("#fname").textContent = file ? "✅ " + file.name : "📄 點此選擇 PDF 或拍照"; };
-  $("#savek").onclick = () => { st.geminiKey = $("#key").value.trim(); st.model = $("#model").value.trim() || "gemini-2.5-flash"; save(); toast("已儲存"); render(); };
+  $("#savek").onclick = () => { st.geminiKey = $("#key").value.trim(); st.model = $("#model").value.trim() || "gemini-3.8-flash"; save(); toast("已儲存"); render(); };
   $("#go").onclick = async () => {
     if (!st.geminiKey) { toast("請先設定 Gemini API Key"); return; }
     if (!file && !$("#txt").value.trim()) { toast("請上傳檔案或貼上文字"); return; }
