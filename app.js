@@ -285,68 +285,121 @@ function Vocab(el, mode, deck = "ALL") {
   $("#q").oninput = draw; draw();
 }
 
+// 滑動方向 → 分級：← 不會、↓ 模糊、→ 會、↑ 太簡單
+const SWIPE = { left: 0, down: 1, right: 2, up: 3 };
+const DIR_OF = ["left", "down", "right", "up"];
+const RATE_TXT = ["不會", "模糊", "會", "太簡單"];
+function cardFront(w, isNew) {
+  return `${isNew ? `<span class="pill new">NEW</span>` : ""}<span class="pill ${S.flags?.[w.w]?.past ? "badc" : ""}">${esc(deckName(w))}</span>
+    <div class="word">${esc(w.w)}</div><div class="pos">${esc(w.pos)}</div>`;
+}
+function swipeHelp() {
+  const d = document.createElement("div");
+  d.className = "modal";
+  d.innerHTML = `<div class="sheet">
+    <h3>四種分級怎麼用</h3>
+    <div class="dirs">
+      <div><b class="c3">↑ 上滑｜太簡單</b><span>一看就會、以後很少需要看 → 間隔拉很長</span></div>
+      <div><b class="c0">← 左滑｜不會</b><span>想不起來 → 1 分鐘後同一輪再出現一次</span></div>
+      <div><b class="c2">→ 右滑｜會</b><span>想得起來 → 照記憶曲線拉長（1 天 → 3 天 → 約一週…）</span></div>
+      <div><b class="c1">↓ 下滑｜模糊</b><span>有印象但不確定、想了很久 → 隔天再出，間隔只稍微拉長</span></div>
+    </div>
+    <p class="muted small">下面四個按鈕和滑動的效果一樣，按鈕上的小字是「下次出現的時間」。<br>拿不定主意就選「模糊」：寧可多看一次，也不要太早放掉。<br>高中就會的新字，直接按「我早就會了」跳過，不佔每日新字額度。</p>
+    <button class="cta" id="okhelp">知道了</button></div>`;
+  document.body.appendChild(d);
+  d.querySelector("#okhelp").onclick = () => { d.remove(); S.settings.seenSwipe = 1; save(); };
+}
 function Flash(el, deck = "ALL") {
   let queue = buildQueue(deck);
-  let flipped = false;
   const total = queue.length;
-  let done = 0;
-  const show = () => {
+  let done = 0, busy = false;
+  const show = (enter = true) => {
     if (!queue.length) {
       el.innerHTML = `<div class="done"><div class="big">🎉</div><h2>今天的卡片刷完了！</h2><p class="muted">完成 ${done} 次複習。明天記得回來。</p>
         <button class="cta" onclick="location.hash='#vocab-quiz'">再來點選擇題</button><a class="ghost block" href="#home">回首頁</a></div>`;
       return;
     }
-    const w = queue[0];
+    const w = queue[0], nx = queue[1];
     const isNew = !S.cards[w.w];
-    flipped = false;
     el.innerHTML = `
-      <div class="topbar"><a href="#vocab-list-${deck}" class="back">‹</a><div class="prog"><i style="width:${total ? done / (total + done) * 100 : 0}%"></i></div><span class="muted">${queue.length}</span></div>
-      <div class="flash" id="fc">
-        <div class="face front">
-          ${isNew ? `<span class="pill new">NEW</span>` : ""}<span class="pill ${S.flags?.[w.w]?.past ? "badc" : ""}">${esc(deckName(w))}</span>
-          <div class="word">${esc(w.w)}</div><div class="pos">${esc(w.pos)}</div>
-          <button class="icon big" id="sp">🔊</button>
-          ${isNew ? `<button class="known" id="known">我早就會了 ✓</button>` : ""}
-          <div class="hint">點一下翻面</div>
-        </div>
-        <div class="face bk">
-          <div class="word sm">${esc(w.w)} <small>${esc(w.pos)}</small></div>
-          <div class="zh">${esc(w.zh)}</div>
-          <div id="exbox">${exHTML(w)}</div>
-          ${w.col ? `<div class="meta"><b>搭配</b> ${esc(w.col)}</div>` : ""}
-          ${w.syn ? `<div class="meta"><b>同義</b> ${esc(w.syn)}</div>` : ""}
-          ${w.root ? `<div class="meta"><b>字根</b> ${esc(w.root)}</div>` : ""}
+      <div class="topbar"><a href="#vocab-list-${deck}" class="back">‹</a><div class="prog"><i style="width:${total ? done / (total + done) * 100 : 0}%"></i></div><span class="muted">${queue.length}</span><button class="icon help" id="help">?</button></div>
+      <div class="stage">
+        ${nx ? `<div class="flash next"><div class="face front">${cardFront(nx, !S.cards[nx.w])}</div></div>` : ""}
+        <div class="flash ${enter ? "enter" : ""}" id="fc">
+          <div class="stamp s0">不會</div><div class="stamp s1">模糊</div><div class="stamp s2">會</div><div class="stamp s3">太簡單</div>
+          <div class="face front">
+            ${cardFront(w, isNew)}
+            <button class="icon big" id="sp">🔊</button>
+            ${isNew ? `<button class="known" id="known">我早就會了 ✓</button>` : ""}
+            <div class="hint">點一下翻面 · 滑動評分</div>
+          </div>
+          <div class="face bk">
+            <div class="word sm">${esc(w.w)} <small>${esc(w.pos)}</small></div>
+            <div class="zh">${esc(w.zh)}</div>
+            <div id="exbox">${exHTML(w)}</div>
+            ${w.col ? `<div class="meta"><b>搭配</b> ${esc(w.col)}</div>` : ""}
+            ${w.syn ? `<div class="meta"><b>同義</b> ${esc(w.syn)}</div>` : ""}
+            ${w.root ? `<div class="meta"><b>字根</b> ${esc(w.root)}</div>` : ""}
+          </div>
         </div>
       </div>
-      <div class="rates" id="rates">
-        <button data-r="0" class="r0">不會<small>1 分鐘</small></button>
-        <button data-r="1" class="r1">模糊<small>${ivlLabel(w, 1)}</small></button>
-        <button data-r="2" class="r2">會<small>${ivlLabel(w, 2)}</small></button>
-        <button data-r="3" class="r3">太簡單<small>${ivlLabel(w, 3)}</small></button>
-      </div>
-      <p class="muted center small">左滑＝不會 · 右滑＝會${isNew ? " · 高中就會的字按「我早就會了」跳過" : ""}</p>`;
+      <div class="rates show" id="rates">
+        <button data-r="0" class="r0"><i>←</i>不會<small>1 分鐘</small></button>
+        <button data-r="1" class="r1"><i>↓</i>模糊<small>${ivlLabel(w, 1)}</small></button>
+        <button data-r="2" class="r2"><i>→</i>會<small>${ivlLabel(w, 2)}</small></button>
+        <button data-r="3" class="r3"><i>↑</i>太簡單<small>${ivlLabel(w, 3)}</small></button>
+      </div>`;
     const fc = $("#fc");
+    const stamps = [...fc.querySelectorAll(".stamp")];
+    $("#help").onclick = swipeHelp;
     const ab = $("#aiex");
     if (ab) ab.onclick = async e => { e.stopPropagation(); ab.disabled = true; ab.textContent = "產生中…"; await fillExample(w); $("#exbox").innerHTML = exHTML(w); };
     $("#sp").onclick = e => { e.stopPropagation(); speak(w.w); };
     if ($("#known")) $("#known").onclick = e => {
       e.stopPropagation();
-      queue.shift(); markKnown(w.w);
-      const next = allWords().find(x => inDeck(x, deck) && !S.cards[x.w] && !queue.includes(x));
-      if (next) queue.push(next);
-      show();
+      flyOut(fc, "up", () => {
+        queue.shift(); markKnown(w.w);
+        const next = allWords().find(x => inDeck(x, deck) && !S.cards[x.w] && !queue.includes(x));
+        if (next) queue.push(next);
+        show();
+      });
     };
-    fc.onclick = () => { flipped = !flipped; fc.classList.toggle("flip", flipped); if (flipped) $("#rates").classList.add("show"); };
-    $("#rates").onclick = e => { const b = e.target.closest("button"); if (b && flipped) answer(+b.dataset.r); };
-    // 滑動手勢
-    let x0 = null, dx = 0;
-    fc.addEventListener("touchstart", e => { x0 = e.touches[0].clientX; dx = 0; fc.style.transition = "none"; }, { passive: true });
-    fc.addEventListener("touchmove", e => { if (x0 == null) return; dx = e.touches[0].clientX - x0; fc.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`; }, { passive: true });
-    fc.addEventListener("touchend", () => {
-      fc.style.transition = ""; fc.style.transform = "";
-      if (Math.abs(dx) > 90) answer(dx > 0 ? 2 : 0);
-      x0 = null;
+    $("#rates").onclick = e => { const b = e.target.closest("button"); if (b) commit(+b.dataset.r); };
+    const commit = r => { if (busy) return; busy = true; flyOut(fc, DIR_OF[r], () => { busy = false; answer(r); }); };
+
+    // ---- 拖曳：卡片跟著手指走，放開時超過門檻或甩得夠快就飛出去 ----
+    let start = null, dx = 0, dy = 0, moved = false;
+    const dirOf = (x, y) => Math.abs(x) >= Math.abs(y) ? (x > 0 ? "right" : "left") : (y > 0 ? "down" : "up");
+    fc.addEventListener("pointerdown", e => {
+      if (busy || e.target.closest("button")) return;
+      start = { x: e.clientX, y: e.clientY, t: Date.now() }; dx = dy = 0; moved = false;
+      fc.setPointerCapture(e.pointerId); fc.style.transition = "none";
     });
+    fc.addEventListener("pointermove", e => {
+      if (!start) return;
+      dx = e.clientX - start.x; dy = e.clientY - start.y;
+      if (Math.hypot(dx, dy) > 8) moved = true;
+      if (!moved) return;
+      fc.style.transform = `translate(${dx}px, ${dy}px) rotate(${dx / 14}deg)`;
+      const d = dirOf(dx, dy), k = Math.min(1, Math.hypot(dx, dy) / 110);
+      stamps.forEach((st, i) => st.style.opacity = DIR_OF[i] === d ? k : 0);
+      fc.dataset.dir = k > .35 ? d : "";
+    });
+    const end = () => {
+      if (!start) return;
+      const dist = Math.hypot(dx, dy), v = dist / Math.max(1, Date.now() - start.t);
+      start = null;
+      if (!moved) { fc.style.transition = ""; fc.classList.toggle("flip"); return; } // 點一下 = 翻面
+      const d = dirOf(dx, dy);
+      const far = (d === "left" || d === "right") ? Math.abs(dx) > 100 : Math.abs(dy) > 90;
+      if (far || (dist > 50 && v > 0.6)) { commit(SWIPE[d]); return; }
+      // 沒滑夠 → 彈回原位
+      fc.style.transition = "transform .35s cubic-bezier(.2,1.4,.4,1)"; fc.style.transform = "";
+      stamps.forEach(st => st.style.opacity = 0); fc.dataset.dir = "";
+    };
+    fc.addEventListener("pointerup", end);
+    fc.addEventListener("pointercancel", end);
+    if (!S.settings.seenSwipe) swipeHelp();
   };
   const answer = r => {
     const w = queue.shift();
@@ -355,7 +408,21 @@ function Flash(el, deck = "ALL") {
     if (r === 0) { queue.splice(Math.min(3, queue.length), 0, w); }
     show();
   };
-  show();
+  show(false);
+}
+// 卡片往某個方向飛出畫面
+function flyOut(fc, dir, cb) {
+  const W = innerWidth * 1.3, H = innerHeight * 1.1;
+  const cur = new DOMMatrix(getComputedStyle(fc).transform);
+  const to = { left: [-W, cur.m42 + 40, -28], right: [W, cur.m42 + 40, 28], up: [cur.m41, -H, cur.m41 / 14], down: [cur.m41, H, cur.m41 / 14] }[dir];
+  const i = DIR_OF.indexOf(dir);
+  fc.querySelectorAll(".stamp").forEach((st, j) => st.style.opacity = j === i ? 1 : 0);
+  fc.dataset.dir = dir;
+  fc.style.transition = "transform .32s cubic-bezier(.4,0,.9,.6), opacity .32s";
+  requestAnimationFrame(() => { fc.style.transform = `translate(${to[0]}px, ${to[1]}px) rotate(${to[2]}deg)`; fc.style.opacity = ".2"; });
+  const nx = document.querySelector(".flash.next");
+  if (nx) nx.classList.add("rise");
+  setTimeout(cb, 300);
 }
 // 沒有例句的字（高中 7000）：用 Gemini 產生學術例句並存起來
 function exHTML(w) {
