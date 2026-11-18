@@ -184,3 +184,7 @@ select.search.half { flex: 1; width: auto; }
 .dirs div { display: flex; flex-direction: column; background: var(--bg); padding: 10px 12px; border-radius: 12px; }
 .dirs span { font-size: 14px; color: var(--muted); }
 .c0 { color: var(--bad); } .c1 { color: var(--mid); } .c2 { color: var(--good); } .c3 { color: var(--pri); }
+.steps { padding-left: 20px; margin: 8px 0; line-height: 1.7; }
+.steps a { color: var(--pri); font-weight: 600; }
+code { background: var(--bg); padding: 1px 5px; border-radius: 5px; font-size: 13px; }
+.badt { color: var(--bad); }

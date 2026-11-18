@@ -11,7 +11,7 @@ const KEY = "iee:v1";
 const DAY = 86400000;
 const NEW_PER_DAY = 40;
 const defaults = () => ({
-  cards: {}, custom: [], customQs: [], mistakes: [], past: [], flags: {},
+  cards: {}, custom: [], customQs: [], mistakes: [], past: [], flags: {}, del: { past: {}, mist: {} },
   streak: { last: "", n: 0 }, log: {},
   settings: { geminiKey: "", model: "gemini-3.8-flash", newPerDay: NEW_PER_DAY },
 });
@@ -23,7 +23,8 @@ function load() {
 // 舊預設模型已停用，自動換成新的
 if (S.settings.model === "gemini-2.5-flash") S.settings.model = "gemini-3.8-flash";
 if (!S.settings.v2) { if (S.settings.newPerDay === 20) S.settings.newPerDay = NEW_PER_DAY; S.settings.v2 = 1; }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} schedulePush(); }
+S.del ||= { past: {}, mist: {} };
 if (navigator.storage?.persist) navigator.storage.persist();
 
 const today = () => new Date().toLocaleDateString("sv"); // YYYY-MM-DD
@@ -64,6 +65,7 @@ function reviewNow(word, src, past = true) {
   const c = S.cards[word] || { ease: 2.5, ivl: 0, reps: 0, lapses: 0 };
   c.due = Date.now(); c.lapses = (c.lapses || 0) + 1; c.ease = Math.max(1.3, (c.ease || 2.5) - 0.2); c.ivl = 0; c.reps = 0;
   delete c.known;
+  c.u = Date.now();
   S.cards[word] = c;
   if (past) S.flags[word] = { past: 1, src: src || (S.flags[word]?.src) || "" };
 }
@@ -103,12 +105,13 @@ function rate(word, r) {
   else if (r === 2) { c.ivl = c.reps === 0 ? 1 : c.reps === 1 ? 3 : c.ivl * c.ease; c.reps++; }
   else { c.ease += 0.15; c.ivl = Math.max(4, (c.ivl || 1) * c.ease * 1.3); c.reps++; }
   c.due = r === 0 ? Date.now() + 60000 : Date.now() + c.ivl * DAY;
+  c.u = Date.now();
   S.cards[word] = c;
   touchStreak(); save();
 }
 // 「我早就會」：直接排到 60 天後，不佔每日新字額度
 function markKnown(word) {
-  S.cards[word] = { ease: 2.8, ivl: 60, reps: 3, lapses: 0, due: Date.now() + 60 * DAY, known: 1 };
+  S.cards[word] = { ease: 2.8, ivl: 60, reps: 3, lapses: 0, due: Date.now() + 60 * DAY, known: 1, u: Date.now() };
   touchStreak(); save();
 }
 function deckStats(deck) {
@@ -151,6 +154,93 @@ function buildQueue(tag) {
   }
   return [...due, ...fresh];
 }
+
+/* ================= 雲端同步（GitHub Gist） ================= */
+// 進度存在你 GitHub 帳號的一個私密 Gist；手機、平板都讀寫同一份，打開時自動合併
+const GIST_FILE = "ie-english-progress.json", GIST_DESC = "ie-english-sync（工工所英文進度，請勿刪除）";
+const gh = () => S.settings.gh || {};
+let pushTimer = null, syncing = false;
+function schedulePush() {
+  if (!gh().token || syncing) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => syncNow(), 4000);
+}
+async function ghFetch(path, opt = {}) {
+  const r = await fetch(`https://api.github.com${path}`, {
+    ...opt, headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${gh().token}`, ...(opt.body ? { "Content-Type": "application/json" } : {}) },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(r.status === 401 ? "Token 無效或已過期" : r.status === 404 ? "找不到同步檔（Token 需要 gist 權限）" : (j.message || `HTTP ${r.status}`));
+  return j;
+}
+// 只同步學習資料，不同步 Key 等設定
+const payload = st => ({ v: 1, cards: st.cards, custom: st.custom, customQs: st.customQs, mistakes: st.mistakes, past: st.past, flags: st.flags, del: st.del, log: st.log, streak: st.streak, exCache: st.exCache || {} });
+function merge(a, b) {
+  const out = { ...a };
+  out.cards = { ...b.cards };
+  for (const [k, c] of Object.entries(a.cards || {})) { const o = out.cards[k]; if (!o || (c.u || 0) > (o.u || 0) || ((c.u || 0) === (o.u || 0) && (c.reps || 0) >= (o.reps || 0))) out.cards[k] = c; }
+  const del = { past: { ...b.del?.past, ...a.del?.past }, mist: { ...b.del?.mist, ...a.del?.mist } };
+  out.del = del;
+  const uni = (x, y, key) => { const m = new Map(); for (const i of [...(y || []), ...(x || [])]) m.set(key(i), i); return [...m.values()]; };
+  out.custom = uni(a.custom, b.custom, w => norm(w.w));
+  out.customQs = uni(a.customQs, b.customQs, q => q.q);
+  out.past = uni(a.past, b.past, p => p.id).filter(p => !del.past[p.id]).sort((x, y) => y.t - x.t);
+  const mm = new Map();
+  for (const m of [...(b.mistakes || []), ...(a.mistakes || [])]) { const o = mm.get(m.q); if (!o || m.t > o.t) mm.set(m.q, m); }
+  out.mistakes = [...mm.values()].filter(m => !(del.mist[m.q] >= m.t)).sort((x, y) => y.t - x.t).slice(0, 300);
+  out.flags = { ...b.flags, ...a.flags };
+  out.exCache = { ...b.exCache, ...a.exCache };
+  out.log = { ...b.log }; for (const [d, n] of Object.entries(a.log || {})) out.log[d] = Math.max(n, out.log[d] || 0);
+  const sa = a.streak || {}, sb = b.streak || {};
+  out.streak = (sb.last || "") > (sa.last || "") ? sb : (sa.last === sb.last ? { last: sa.last, n: Math.max(sa.n || 0, sb.n || 0) } : sa);
+  return out;
+}
+async function findGist() {
+  for (let page = 1; page <= 5; page++) {
+    const list = await ghFetch(`/gists?per_page=100&page=${page}`);
+    const g = list.find(x => x.files?.[GIST_FILE]);
+    if (g) return g.id;
+    if (list.length < 100) break;
+  }
+  return null;
+}
+async function readGist(id) {
+  const g = await ghFetch(`/gists/${id}`);
+  const f = g.files?.[GIST_FILE];
+  if (!f) return null;
+  let text = f.content;
+  if (f.truncated) text = await (await fetch(f.raw_url)).text();
+  return JSON.parse(text || "{}");
+}
+// 拉下雲端 → 合併 → 推回去
+async function syncNow(manual) {
+  if (!gh().token || syncing) return;
+  syncing = true; clearTimeout(pushTimer);
+  const set = st => { S.settings.gh = { ...gh(), ...st }; localStorage.setItem(KEY, JSON.stringify(S)); updSyncBadge(); };
+  try {
+    set({ state: "syncing" });
+    let id = gh().gistId || await findGist();
+    const remote = id ? await readGist(id) : null;
+    const before = JSON.stringify(payload(S));
+    if (remote) Object.assign(S, merge(payload(S), remote));
+    const body = JSON.stringify({ description: GIST_DESC, files: { [GIST_FILE]: { content: JSON.stringify(payload(S)) } } });
+    if (id) await ghFetch(`/gists/${id}`, { method: "PATCH", body });
+    else id = (await ghFetch(`/gists`, { method: "POST", body: body.replace("{\"description\"", "{\"public\":false,\"description\"") })).id;
+    set({ gistId: id, state: "ok", at: Date.now(), err: "" });
+    if (manual) toast("已同步");
+    if (remote && JSON.stringify(payload(S)) !== before && !document.querySelector("#fc")) render(); // 有新資料就重畫（刷卡中不打斷）
+  } catch (e) {
+    set({ state: "err", err: e.message });
+    if (manual) toast("同步失敗：" + e.message);
+  } finally { syncing = false; }
+}
+function updSyncBadge() {
+  const b = document.querySelector("#syncstat"); if (!b) return;
+  const g = gh();
+  b.innerHTML = !g.token ? "尚未設定" : g.state === "syncing" ? "同步中…" : g.state === "err" ? `<span class="badt">失敗：${esc(g.err)}</span>`
+    : g.at ? `✓ 已同步 ${new Date(g.at).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit" })}` : "";
+}
+document.addEventListener("visibilitychange", () => { if (!gh().token) return; document.visibilityState === "visible" ? syncNow() : (clearTimeout(pushTimer), syncNow()); });
 
 /* ================= 發音 ================= */
 function speak(text) {
@@ -216,19 +306,41 @@ function Home(el) {
         : `<p class="muted">答錯的題目會自動收進這裡。</p>`}
     </section>
     <section class="card-box">
+      <h3>☁️ 手機 / 平板同步 <small id="syncstat"></small></h3>
+      ${gh().token ? `<p class="muted small">已連線 GitHub。打開 App、離開 App、刷完卡幾秒後都會自動同步。</p>
+        <div class="row"><button class="ghost" id="syncnow">立即同步</button><button class="ghost" id="syncoff">中斷連線</button></div>`
+      : `<p class="muted small">用你的 GitHub 帳號存一份私密的進度檔，手機和平板<b>都要</b>各設定一次同一個 Token。</p>
+        <ol class="small steps"><li><a href="https://github.com/settings/tokens/new?scopes=gist&description=ie-english-sync" target="_blank" rel="noopener">點這裡建立 Token</a>（已幫你勾好 <b>gist</b> 權限）</li>
+        <li>Expiration 建議選 <b>No expiration</b> 或考完試之後的日期 → 拉到最下面按 <b>Generate token</b></li>
+        <li>複製 <code>ghp_</code> 開頭的那串，貼到下面</li></ol>
+        <input class="search" id="ghtoken" type="password" placeholder="貼上 GitHub Token（ghp_…）" autocomplete="off">
+        <button class="cta" id="syncon">連線並同步</button>`}
+    </section>
+    <section class="card-box">
       <h3>資料備份</h3>
-      <p class="muted">進度存在這支手機上。建議每週匯出一次備份。</p>
+      <p class="muted">進度存在這台裝置上（有開同步的話雲端也有一份）。建議偶爾匯出一次備份。</p>
       <div class="row"><button class="ghost" id="exp">匯出備份</button><label class="ghost file">匯入備份<input type="file" id="imp" accept=".json" hidden></label></div>
     </section>`;
+  updSyncBadge();
+  if ($("#syncon")) $("#syncon").onclick = async () => {
+    const t = $("#ghtoken").value.trim();
+    if (!/^(ghp_|github_pat_|gho_)/.test(t)) return toast("Token 格式不對，應該是 ghp_ 開頭");
+    S.settings.gh = { token: t }; save();
+    $("#syncon").disabled = true; $("#syncon").textContent = "連線中…";
+    await syncNow(true);
+    render();
+  };
+  if ($("#syncnow")) $("#syncnow").onclick = () => syncNow(true);
+  if ($("#syncoff")) $("#syncoff").onclick = () => { delete S.settings.gh; save(); toast("已中斷同步（雲端的進度檔還在）"); render(); };
   $("#exp").onclick = () => {
     const a = document.createElement("a");
-    const data = { ...S, settings: { ...S.settings, geminiKey: "" } };
+    const data = { ...S, settings: { ...S.settings, geminiKey: "", gh: undefined } };
     a.href = URL.createObjectURL(new Blob([JSON.stringify(data)], { type: "application/json" }));
     a.download = `ie-english-backup-${today()}.json`; a.click();
   };
   $("#imp").onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
-    try { const d = JSON.parse(await f.text()); const key = S.settings.geminiKey; S = Object.assign(defaults(), d); S.settings.geminiKey ||= key; save(); toast("已匯入備份"); render(); }
+    try { const d = JSON.parse(await f.text()); const key = S.settings.geminiKey, gh0 = S.settings.gh; S = Object.assign(defaults(), d); S.settings.geminiKey ||= key; S.settings.gh = gh0; save(); toast("已匯入備份"); render(); }
     catch { toast("檔案格式錯誤"); }
   };
 }
@@ -530,7 +642,7 @@ function Quiz(el, t, back, kind = "文法", onAnswer) {
       if (onAnswer) onAnswer(q, ok);
       el.querySelectorAll(".opts button")[q.a].classList.add("ok");
       if (!ok) { b.classList.add("bad"); addMistake({ kind, q: q.q, opts: q.opts, a: q.a, ex: q.ex }); }
-      else { correct++; S.mistakes = S.mistakes.filter(m => m.q !== q.q); }
+      else { correct++; if (S.mistakes.some(m => m.q === q.q)) { S.del.mist[q.q] = Date.now(); S.mistakes = S.mistakes.filter(m => m.q !== q.q); } }
       save();
       $("#fb").innerHTML = `<div class="explain ${ok ? "good" : "badc"}"><b>${ok ? "答對" : "答錯"}</b> ${esc(q.ex)}</div><button class="cta" id="nx">下一題</button>`;
       $("#nx").onclick = () => { n++; next(); };
@@ -794,7 +906,7 @@ function Past(el, filter = "ALL", mode) {
       : `<div class="card-box center"><p class="muted">還沒有歷屆錯題。</p><a class="cta block" href="#import">上傳第一份考卷</a></div>`}`;
   if ($("#srcs")) $("#srcs").onclick = e => { const b = e.target.closest(".chip"); if (b) location.hash = `#past-${encodeURIComponent(b.dataset.s)}`; };
   if ($("#redo")) $("#redo").onclick = () => Past(el, filter, "quiz");
-  el.querySelectorAll(".del").forEach(b => b.onclick = () => { S.past = S.past.filter(p => p.id !== b.dataset.id); save(); Past(el, filter); });
+  el.querySelectorAll(".del").forEach(b => b.onclick = () => { S.del.past[b.dataset.id] = Date.now(); S.past = S.past.filter(p => p.id !== b.dataset.id); save(); Past(el, filter); });
 }
 
 /* ================= 片語專區 ================= */
@@ -875,4 +987,5 @@ function toast(msg) {
 
 window.rerender = render;
 render();
+if (gh().token) syncNow();
 if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("./sw.js").catch(() => {});
