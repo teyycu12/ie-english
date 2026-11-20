@@ -12,8 +12,15 @@ import n2 from "./l7000/n2.js";
 import n3 from "./l7000/n3.js";
 import n4 from "./l7000/n4.js";
 import n5 from "./l7000/n5.js";
+import m1 from "./l7000/m1.js";
+import m2 from "./l7000/m2.js";
+import m3 from "./l7000/m3.js";
+import m4 from "./l7000/m4.js";
+import m5 from "./l7000/m5.js";
+import m6 from "./l7000/m6.js";
+import m7 from "./l7000/m7.js";
 
-export const L7000 = [p1, p2, p3, p4, p5, p6, n1, n2, n3, n4, n5].flatMap(block =>
+export const L7000 = [p1, p2, p3, p4, p5, p6, n1, n2, n3, n4, n5, m1, m2, m3, m4, m5, m6, m7].flatMap(block =>
   block.trim().split("\n").map(line => {
     const [lv, w, pos, zh, ex, exZh] = line.split("|");
     return { w, pos, zh, ex, exZh, tag: "L7000", sub: +lv };
