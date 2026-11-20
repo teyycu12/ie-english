@@ -188,3 +188,4 @@ select.search.half { flex: 1; width: auto; }
 .steps a { color: var(--pri); font-weight: 600; }
 code { background: var(--bg); padding: 1px 5px; border-radius: 5px; font-size: 13px; }
 .badt { color: var(--bad); }
+.wrongq { background: color-mix(in srgb, var(--bad) 5%, transparent); }

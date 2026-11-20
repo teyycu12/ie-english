@@ -681,18 +681,20 @@ function Import(el) {
   el.innerHTML = `<h2 class="title">上傳歷屆考卷</h2>
     <div class="seg"><a href="#past">錯題專區</a><a href="#import" class="on">上傳分析</a></div>
     <p class="muted">上傳寫過的歷屆考題（PDF / 照片 / 貼文字）。AI 會：<br>
-      ① 把你錯的題目收進「歷屆錯題專區」<br>
-      ② 錯的單字／片語：<b>字庫已經有的直接排進今天複習</b>，沒有的才新增<br>
-      ③ 從錯誤延伸出類似題</p>
+      ① 先逐題讀完整份考卷，列出每一題你的答案與正解，讓你核對錯題<br>
+      ② 你勾選的錯題存進「歷屆錯題專區」<br>
+      ③ 錯的單字／片語：<b>字庫已經有的直接排進今天複習</b>，沒有的才新增，並延伸出類似題</p>
     <div class="card-box">
       <h3>1. 哪一份考卷</h3>
       <div class="row"><select class="search half" id="school">${SCHOOLS.map(x => `<option>${x}</option>`).join("")}</select>
         <select class="search half" id="year">${years.map(y => `<option>${y}</option>`).join("")}</select></div>
       <h3>2. 上傳</h3>
-      <label class="drop" id="drop"><input type="file" id="file" accept="application/pdf,image/*" hidden><span id="fname">📄 點此選擇 PDF 或拍照</span></label>
+      <label class="drop" id="drop"><input type="file" id="file" accept="application/pdf,image/*" multiple hidden><span id="fname">📄 點此選擇 PDF 或照片（可多選）</span></label>
       <textarea id="txt" rows="4" placeholder="或直接貼上題目與你的答案…"></textarea>
-      <h3>3. 補充說明（選填）</h3>
-      <input class="search" id="note" placeholder="例：第 3、7 題錯，第 12 題用猜的；正確答案 1-10: BCADA…">
+      <h3>3. 正確答案（建議填）</h3>
+      <textarea id="key2" rows="2" placeholder="有答案卷就貼上或打在這裡，例：1-10 BCADA CDBAA、11-20 …（AI 判斷錯題會更準）"></textarea>
+      <h3>4. 補充說明（選填）</h3>
+      <input class="search" id="note" placeholder="例：第 12、18 題是用猜的">
       <button class="cta" id="go">✨ AI 分析</button>
       <div id="out"></div>
     </div>
@@ -708,8 +710,11 @@ function Import(el) {
       <div id="mlist"></div>
       ${st.lastGood ? `<p class="muted small">上次自動改用：${esc(st.lastGood)}</p>` : ""}
     </details>`;
-  let file = null;
-  $("#file").onchange = e => { file = e.target.files[0]; $("#fname").textContent = file ? "✅ " + file.name : "📄 點此選擇 PDF 或拍照"; };
+  let files = [];
+  $("#file").onchange = e => {
+    files = [...e.target.files];
+    $("#fname").innerHTML = files.length ? `✅ ${files.length} 個檔案：${files.map(f => esc(f.name)).join("、")}` : "📄 點此選擇 PDF 或照片（可多選）";
+  };
   $("#lsm").onclick = async () => {
     st.geminiKey = $("#key").value.trim(); save();
     if (!st.geminiKey) return toast("請先貼上 Key");
@@ -726,36 +731,57 @@ function Import(el) {
   $("#savek").onclick = () => { st.geminiKey = $("#key").value.trim(); st.model = $("#model").value.trim() || "gemini-3.8-flash"; st.fallback = $("#fallback").value.trim(); save(); toast("已儲存"); render(); };
   $("#go").onclick = async () => {
     if (!st.geminiKey) { toast("請先設定 Gemini API Key"); return; }
-    if (!file && !$("#txt").value.trim()) { toast("請上傳檔案或貼上文字"); return; }
+    if (!files.length && !$("#txt").value.trim()) { toast("請上傳檔案或貼上文字"); return; }
     const out = $("#out"), src = `${$("#school").value} ${$("#year").value}`;
-    out.innerHTML = `<div class="loading"><i></i>AI 分析中，約 10–30 秒…</div>`;
+    out.innerHTML = `<div class="loading"><i></i>第 1 步：AI 逐題讀取整份考卷，約 20–60 秒…</div>`;
     $("#go").disabled = true;
-    try { showResult(out, await analyze(file, $("#txt").value, $("#note").value), src); }
+    try { showExtract(out, await extractAll(files, $("#txt").value, $("#key2").value, $("#note").value), src); }
     catch (e) { out.innerHTML = `<div class="explain badc"><b>失敗</b> ${esc(/fetch/i.test(e.message) ? "無法連線到 Gemini（預覽版會擋外部連線，部署到正式網址後就能用）" : e.message)}</div>`; }
     finally { $("#go").disabled = false; }
   };
 }
 
-const PROMPT = `你是台灣研究所入學考試（台大、清大、交大、台科大 工業工程/工業管理所）的英文家教。
-以下是學生寫過的歷屆英文考題與他的作答。請：
-1. wrong：列出學生「答錯」或「不確定」的每一題。保留原題目與選項，標出學生的答案與正確答案，用中文解析，並寫出考的知識點（point，例如「片語 take over」「假設語氣倒裝」「單字 mitigate」）。
-2. vocab：這些錯題牽涉到的單字（含正確答案與學生誤選的選項），以及值得延伸的同字根、同義、易混淆字。附詞性、中文、一句學術/工工情境例句與中譯。
-3. phrases：錯題牽涉到的片語（例如 take on / take over），附中文與例句。
-4. questions：從錯誤延伸的新選擇題（仿研究所難度，四個選項，附中文解析）。
-5. 每項附 reason（例如「第 3 題選錯」「延伸自 adapt/adopt 混淆」）。
-只輸出 JSON：
-{"summary":"中文總結弱點","wrong":[{"no":"題號","q":"題目","opts":["","","",""],"mine":0,"a":1,"ex":"解析","point":"知識點"}],"vocab":[{"w":"","pos":"","zh":"","ex":"","exZh":"","reason":""}],"phrases":[{"w":"","zh":"","ex":"","reason":""}],"questions":[{"q":"","opts":["","","",""],"a":0,"ex":"","reason":""}]}
-mine 與 a 是選項索引（0 開始）；學生沒作答或非選擇題時 mine 填 -1，opts 可為空陣列。`;
+const EXAM_CTX = "你是台灣研究所入學考試（台大、清大、交大、台科大 工業工程/工業管理所）的英文家教。";
+// 第 1 步：逐題轉錄「全部」題目，不挑錯題（錯題由程式比對答案判斷）
+const PROMPT_EXTRACT = `${EXAM_CTX}
+以下是學生寫過的歷屆英文考卷（可能有多頁、多張照片）。請「逐題」轉錄整份考卷的每一題，包含答對的題目，一題都不能省略、不能合併、不能只挑錯的。
+題型包括：字彙、文法、片語、克漏字（每個空格算一題）、閱讀測驗（每個小題算一題，q 寫題目本身即可，不用抄整篇文章）、翻譯或作文（各算一題）。
+每題欄位：
+- no：題號（照考卷）
+- type：vocab / grammar / phrase / cloze / reading / writing 其中之一
+- q：題目（克漏字請附該空格前後的句子）
+- opts：選項陣列（非選擇題為空陣列）
+- mine：學生的答案（選擇題填選項索引 0 開始；看不出來或沒作答填 -1）
+- a：正確答案（選擇題填選項索引；若有提供答案卷以答案卷為準，否則自行判斷）
+- mineText / ansText：非選擇題時學生答案與參考答案（選擇題留空字串）
+- unsure：學生有標記不確定、塗改、問號時為 true
+- ex：一兩句中文解析
+- point：考的知識點，例如「片語 take over」「假設語氣倒裝」「單字 mitigate」
+只輸出 JSON：{"total":總題數,"items":[{"no":"","type":"","q":"","opts":[],"mine":-1,"a":-1,"mineText":"","ansText":"","unsure":false,"ex":"","point":""}]}`;
+// 第 2 步：只針對勾選的錯題產生單字、片語、延伸題
+const PROMPT_DEEP = `${EXAM_CTX}
+以下是學生在歷屆考題中答錯或不確定的題目（JSON）。請：
+1. vocab：錯題牽涉的單字（含正確答案與學生誤選的選項），以及值得延伸的同字根、同義、易混淆字。每題至少 1 個。
+2. phrases：錯題牽涉的片語（例如 take on / take over）。
+3. questions：從錯誤延伸的新選擇題，仿研究所難度，四個選項，附中文解析，數量約為錯題數。
+4. summary：用中文總結學生的弱點。
+每個單字/片語都要附：中文、一句學術或工工/管理情境例句、例句中譯，以及 reason（例如「第 3 題選錯」）。
+只輸出 JSON：{"summary":"","vocab":[{"w":"","pos":"","zh":"","ex":"","exZh":"","reason":""}],"phrases":[{"w":"","zh":"","ex":"","exZh":"","reason":""}],"questions":[{"q":"","opts":["","","",""],"a":0,"ex":"","reason":""}]}`;
 
-async function analyze(file, text, note) {
-  const parts = [{ text: PROMPT + (note ? `\n學生補充：${note}` : "") + (text ? `\n\n題目內容：\n${text}` : "") }];
-  if (file) {
-    if (file.size > 15 * 1024 * 1024) throw new Error("檔案超過 15MB，請分頁上傳");
-    const b64 = await new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(r.result.split(",")[1]); r.onerror = no; r.readAsDataURL(file); });
-    parts.push({ inline_data: { mime_type: file.type || "application/pdf", data: b64 } });
-  }
-  return gemini(parts);
+const fileToPart = f => new Promise((ok, no) => {
+  if (f.size > 15 * 1024 * 1024) return no(new Error(`「${f.name}」超過 15MB，請分開上傳`));
+  const r = new FileReader();
+  r.onload = () => ok({ inline_data: { mime_type: f.type || "application/pdf", data: r.result.split(",")[1] } });
+  r.onerror = no; r.readAsDataURL(f);
+});
+async function extractAll(files, text, key, note) {
+  const parts = [{ text: PROMPT_EXTRACT + (key ? `\n\n正確答案（答案卷）：\n${key}` : "") + (note ? `\n\n學生補充：${note}` : "") + (text ? `\n\n考卷內容：\n${text}` : "") }];
+  for (const f of files) parts.push(await fileToPart(f));
+  const r = await gemini(parts);
+  const items = (r.items || []).filter(x => x && x.q);
+  return { total: r.total || items.length, items };
 }
+const isWrong = x => x.unsure || (Array.isArray(x.opts) && x.opts.length ? (x.a >= 0 && x.mine !== x.a) : (x.ansText && norm(x.mineText) !== norm(x.ansText)));
 
 // 忙碌（503 / 429 / high demand）時自動重試；還是不行就自動換其他可用的 Flash 模型
 const BUSY = (status, msg) => status === 503 || status === 429 || status === 500 || /high demand|overload|unavailable|try again/i.test(msg || "");
@@ -765,7 +791,7 @@ async function callModel(model, parts) {
   const r = await fetch(`${API}/models/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "x-goog-api-key": S.settings.geminiKey },
-    body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", temperature: 0.4 } }),
+    body: JSON.stringify({ contents: [{ role: "user", parts }], generationConfig: { responseMimeType: "application/json", temperature: 0.3, maxOutputTokens: 32768 } }),
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
@@ -809,9 +835,13 @@ async function gemini(parts) {
       try {
         const j = await callModel(model, parts);
         if (model !== S.settings.model) { S.settings.lastGood = model; S.settings.lastGoodAt = Date.now(); save(); }
-        const t = j.candidates?.[0]?.content?.parts?.map(p => p.text).join("") || "";
+        const c0 = j.candidates?.[0];
+        const t = c0?.content?.parts?.map(p => p.text).join("") || "";
         try { return JSON.parse(t.replace(/^```json|```$/g, "").trim()); }
-        catch { throw Object.assign(new Error("AI 回傳格式無法解析，請再試一次"), { final: 1 }); }
+        catch {
+          if (c0?.finishReason === "MAX_TOKENS") throw Object.assign(new Error("考卷太長，AI 的回應被截斷了。請把考卷分成幾次上傳（例如每次 2–3 頁）。"), { final: 1 });
+          throw Object.assign(new Error("AI 回傳格式無法解析，請再試一次"), { final: 1 });
+        }
       } catch (e) {
         if (e.final) throw e;
         lastErr = e;
@@ -826,34 +856,73 @@ async function gemini(parts) {
   throw new Error(`所有可用模型都在忙（${lastErr?.message || "high demand"}）。請過幾分鐘再試。`);
 }
 
-function showResult(out, res, src) {
+// 第 1 步結果：列出全部題目，自動勾選錯題，讓使用者核對
+function showExtract(out, res, src) {
+  const items = res.items;
+  const ansTxt = (x, i) => x.opts?.length ? (i >= 0 ? `${"ABCDE"[i] || "?"}. ${x.opts[i] ?? ""}` : "未作答") : null;
+  const nWrong = items.filter(isWrong).length;
+  out.innerHTML = `
+    <div class="explain"><b>讀到 ${items.length} 題</b>${res.total && res.total !== items.length ? `（AI 說考卷共 ${res.total} 題）` : ""}，自動判斷你錯或不確定 <b>${nWrong}</b> 題。<br>
+      <span class="small muted">請核對：題數不對就把漏掉的頁分開再上傳一次；判斷錯的可以直接勾選或取消。</span></div>
+    <div class="row"><button class="ghost" id="selwrong">只勾錯題</button><button class="ghost" id="selnone">全部取消</button></div>
+    <ul class="pick">${items.map((x, i) => {
+      const w = isWrong(x);
+      const mine = x.opts?.length ? ansTxt(x, x.mine) : (x.mineText || "—");
+      const ans = x.opts?.length ? ansTxt(x, x.a) : (x.ansText || "—");
+      return `<li class="${w ? "wrongq" : ""}"><label><input type="checkbox" ${w ? "checked" : ""} data-x="${i}"><div>
+        <span class="pill ${w ? "badc" : "good"}">${esc(x.no || i + 1)}${x.unsure ? " ?" : ""}</span><span class="pill">${esc(x.type || "")}</span>
+        <div>${esc(x.q)}</div>
+        <div class="small">你：<span class="${w ? "badt" : ""}">${esc(mine)}</span>　正解：<b class="c2">${esc(ans)}</b></div>
+        ${x.point ? `<div class="muted small">${esc(x.point)}</div>` : ""}</div></label></li>`;
+    }).join("")}</ul>
+    <button class="cta" id="deep">第 2 步：把勾選的題目存進錯題專區並產生單字卡</button>`;
+  out.scrollIntoView({ behavior: "smooth", block: "start" });
+  const boxes = () => [...out.querySelectorAll("input[data-x]")];
+  $("#selwrong").onclick = () => boxes().forEach(c => c.checked = isWrong(items[+c.dataset.x]));
+  $("#selnone").onclick = () => boxes().forEach(c => c.checked = false);
+  $("#deep").onclick = async () => {
+    const picked = boxes().filter(c => c.checked).map(c => items[+c.dataset.x]);
+    if (!picked.length) return toast("請至少勾選一題");
+    // 先把錯題存進專區（不用等 AI）
+    let nw = 0; const add = [];
+    for (const x of picked) {
+      if (S.past.some(p => p.q === x.q && p.src === src)) continue;
+      add.push({ id: Date.now() + "_" + nw, src, no: String(x.no || ""), q: x.q, opts: Array.isArray(x.opts) ? x.opts : [], mine: x.mine ?? -1, a: x.a ?? -1,
+        mineText: x.mineText || "", ansText: x.ansText || "", ex: x.ex || "", point: x.point || "", type: x.type || "", t: Date.now() - nw, done: 0 });
+      nw++;
+    }
+    S.past = [...add, ...S.past];
+    save();
+    out.innerHTML = `<div class="explain good"><b>錯題專區 +${nw} 題</b></div><div class="loading"><i></i>第 2 步：AI 針對 ${picked.length} 題錯題產生單字卡和延伸題…</div>`;
+    try {
+      const slim = picked.map(({ no, q, opts, mine, a, mineText, ansText, point }) => ({ no, q, opts, mine, a, mineText, ansText, point }));
+      showDeep(out, await gemini([{ text: PROMPT_DEEP + "\n\n錯題：\n" + JSON.stringify(slim) }]), src, nw);
+    } catch (e) {
+      out.innerHTML = `<div class="explain good"><b>錯題專區 +${nw} 題</b>（已存好）</div><div class="explain badc"><b>單字卡產生失敗</b> ${esc(e.message)}</div><a class="cta block" href="#past">看錯題專區</a>`;
+    }
+  };
+}
+
+// 第 2 步結果：單字（字庫已有 → 排入複習；沒有才新增）、片語、延伸題
+function showDeep(out, res, src, nw) {
   const ok4 = x => Array.isArray(x.opts) && x.opts.length === 4 && x.a >= 0 && x.a < 4;
-  const wrong = (res.wrong || []).filter(x => x.q);
   const items = [
     ...(res.vocab || []).filter(x => x.w && x.zh).map(x => ({ ...x, kind: "v" })),
     ...(res.phrases || []).filter(x => x.w && x.zh).map(x => ({ ...x, kind: "p" })),
   ].map(x => ({ ...x, hit: findWord(x.w) }));
   const q = (res.questions || []).filter(x => x.q && ok4(x));
-  const li = (x, i) => `<li><label><input type="checkbox" checked data-i="${i}"><div><b>${esc(x.w)}</b> ${esc(x.zh)}
-      ${x.hit ? `<span class="pill good">字庫已有 → 排入複習</span>` : `<span class="pill new">新增</span>`}${x.kind === "p" ? `<span class="pill">片語</span>` : ""}
-      <div class="muted small">${esc(x.reason || "")}</div></div></label></li>`;
   out.innerHTML = `
+    <div class="explain good"><b>錯題專區 +${nw} 題</b>（已存好）</div>
     ${res.summary ? `<div class="explain"><b>弱點分析</b> ${esc(res.summary)}</div>` : ""}
-    <h3>歷屆錯題 <small>${wrong.length} 題 → 存進錯題專區</small></h3>
-    <ul class="pick">${wrong.map((x, i) => `<li><label><input type="checkbox" checked data-w="${i}"><div>${esc(x.no ? x.no + ". " : "")}${esc(x.q)}<div class="muted small">${esc(x.point || "")}</div></div></label></li>`).join("")}</ul>
     <h3>單字 / 片語 <small>${items.length}</small></h3>
-    <ul class="pick">${items.map(li).join("")}</ul>
+    <ul class="pick">${items.map((x, i) => `<li><label><input type="checkbox" checked data-i="${i}"><div><b>${esc(x.w)}</b> ${esc(x.zh)}
+      ${x.hit ? `<span class="pill good">字庫已有 → 排入複習</span>` : `<span class="pill new">新增</span>`}${x.kind === "p" ? `<span class="pill">片語</span>` : ""}
+      <div class="muted small">${esc(x.reason || "")}</div></div></label></li>`).join("")}</ul>
     <h3>延伸題 <small>${q.length}</small></h3>
     <ul class="pick">${q.map((x, i) => `<li><label><input type="checkbox" checked data-q="${i}"><div>${esc(x.q)}<div class="muted small">${esc(x.reason || "")}</div></div></label></li>`).join("")}</ul>
-    <button class="cta" id="addall">全部存進題庫</button>`;
+    <button class="cta" id="addall">存進題庫</button>`;
   $("#addall").onclick = () => {
-    let nw = 0, nNew = 0, nRev = 0, nq = 0;
-    out.querySelectorAll("input[data-w]:checked").forEach(c => {
-      const x = wrong[+c.dataset.w];
-      if (S.past.some(p => p.q === x.q)) return;
-      S.past.unshift({ id: Date.now() + "" + nw, src, no: x.no || "", q: x.q, opts: Array.isArray(x.opts) ? x.opts : [], mine: x.mine ?? -1, a: x.a ?? -1, ex: x.ex || "", point: x.point || "", t: Date.now(), done: 0 });
-      nw++;
-    });
+    let nNew = 0, nRev = 0, nq = 0;
     out.querySelectorAll("input[data-i]:checked").forEach(c => {
       const x = items[+c.dataset.i];
       if (x.hit) { reviewNow(x.hit.w, src); nRev++; return; }
@@ -885,6 +954,7 @@ function Past(el, filter = "ALL", mode) {
         <div class="row between"><span class="pill badc">${esc(p.src)}${p.no ? " 第 " + esc(p.no) + " 題" : ""}</span>${p.point ? `<span class="pill">${esc(p.point)}</span>` : ""}</div>
         <div class="cloze">${esc(p.q)}</div>
         ${p.opts?.length ? `<ol class="olist" type="A">${p.opts.map((o, i) => `<li class="${i === p.a ? "okc" : i === p.mine ? "badt" : ""}">${esc(o)}${i === p.a ? " ✓" : i === p.mine ? " ✗ 你的答案" : ""}</li>`).join("")}</ol>` : ""}
+        ${!p.opts?.length && (p.mineText || p.ansText) ? `<div class="small">你：<span class="badt">${esc(p.mineText || "—")}</span><br>參考答案：<b class="c2">${esc(p.ansText || "—")}</b></div>` : ""}
         ${p.ex ? `<div class="explain">${esc(p.ex)}</div>` : ""}
         <button class="icon small del" data-id="${esc(p.id)}">刪除</button></li>`).join("")}</ul>`
       : `<div class="card-box center"><p class="muted">還沒有歷屆錯題。</p><a class="cta block" href="#import">上傳第一份考卷</a></div>`}`;
