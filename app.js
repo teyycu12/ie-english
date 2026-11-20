@@ -109,11 +109,6 @@ function rate(word, r) {
   S.cards[word] = c;
   touchStreak(); save();
 }
-// 「我早就會」：直接排到 60 天後，不佔每日新字額度
-function markKnown(word) {
-  S.cards[word] = { ease: 2.8, ivl: 60, reps: 3, lapses: 0, due: Date.now() + 60 * DAY, known: 1, u: Date.now() };
-  touchStreak(); save();
-}
 function deckStats(deck) {
   const ws = allWords().filter(w => inDeck(w, deck));
   let learned = 0, mastered = 0;
@@ -416,7 +411,7 @@ function swipeHelp() {
       <div><b class="c2">→ 右滑｜會</b><span>想得起來 → 照記憶曲線拉長（1 天 → 3 天 → 約一週…）</span></div>
       <div><b class="c1">↓ 下滑｜模糊</b><span>有印象但不確定、想了很久 → 隔天再出，間隔只稍微拉長</span></div>
     </div>
-    <p class="muted small">下面四個按鈕和滑動的效果一樣，按鈕上的小字是「下次出現的時間」。<br>拿不定主意就選「模糊」：寧可多看一次，也不要太早放掉。<br>高中就會的新字，直接按「我早就會了」跳過，不佔每日新字額度。</p>
+    <p class="muted small">下面四個按鈕和滑動的效果一樣，按鈕上的小字是「下次出現的時間」。<br>拿不定主意就選「模糊」：寧可多看一次，也不要太早放掉。</p>
     <button class="cta" id="okhelp">知道了</button></div>`;
   document.body.appendChild(d);
   d.querySelector("#okhelp").onclick = () => { d.remove(); S.settings.seenSwipe = 1; save(); };
@@ -442,7 +437,6 @@ function Flash(el, deck = "ALL") {
           <div class="face front">
             ${cardFront(w, isNew)}
             <button class="icon big" id="sp">🔊</button>
-            ${isNew ? `<button class="known" id="known">我早就會了 ✓</button>` : ""}
             <div class="hint">點一下翻面 · 滑動評分</div>
           </div>
           <div class="face bk">
@@ -464,18 +458,8 @@ function Flash(el, deck = "ALL") {
     const fc = $("#fc");
     const stamps = [...fc.querySelectorAll(".stamp")];
     $("#help").onclick = swipeHelp;
-    const ab = $("#aiex");
-    if (ab) ab.onclick = async e => { e.stopPropagation(); ab.disabled = true; ab.textContent = "產生中…"; await fillExample(w); $("#exbox").innerHTML = exHTML(w); };
+    if ($("#aiex")) fillExample(w).then(() => { const b = document.querySelector("#exbox"); if (b && queue[0] === w) b.innerHTML = exHTML(w); });
     $("#sp").onclick = e => { e.stopPropagation(); speak(w.w); };
-    if ($("#known")) $("#known").onclick = e => {
-      e.stopPropagation();
-      flyOut(fc, "up", () => {
-        queue.shift(); markKnown(w.w);
-        const next = allWords().find(x => inDeck(x, deck) && !S.cards[x.w] && !queue.includes(x));
-        if (next) queue.push(next);
-        show();
-      });
-    };
     $("#rates").onclick = e => { const b = e.target.closest("button"); if (b) commit(+b.dataset.r); };
     const commit = r => { if (busy) return; busy = true; flyOut(fc, DIR_OF[r], () => { busy = false; answer(r); }); };
 
@@ -540,7 +524,7 @@ function flyOut(fc, dir, cb) {
 function exHTML(w) {
   const ex = w.ex || S.exCache?.[w.w]?.ex;
   if (ex) return `<div class="ex">${esc(ex)}</div><div class="muted">${esc(w.exZh || S.exCache[w.w]?.exZh || "")}</div>`;
-  return S.settings.geminiKey ? `<button class="known" id="aiex">✨ AI 產生學術例句</button>`
+  return S.settings.geminiKey ? `<p class="muted small" id="aiex">✨ AI 正在產生例句…</p>`
     : `<p class="muted small">例句：到「匯入」頁設定 Gemini Key 後可自動產生</p>`;
 }
 async function fillExample(w) {
